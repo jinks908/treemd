@@ -4,8 +4,13 @@
 //! their heading structure into a hierarchical tree.
 
 mod document;
+pub mod output;
+pub mod content;
+pub mod builder;
 
 pub use document::{Document, Heading, HeadingNode};
+pub use output::{DocumentOutput, Section, Block, InlineElement};
+pub use builder::build_json_output;
 
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use std::path::Path;
