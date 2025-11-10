@@ -2,7 +2,7 @@ use clap::{Parser, ValueEnum};
 use std::path::PathBuf;
 
 #[cfg(feature = "unstable-dynamic")]
-use clap_complete::engine::{ArgValueCandidates, CompletionCandidate};
+use clap_complete::engine::{ArgValueCompleter, CompletionCandidate, ValueCompleter};
 
 #[derive(Parser, Debug)]
 #[command(name = "treemd")]
@@ -123,36 +123,96 @@ pub enum OutputFormat {
 }
 
 #[cfg(feature = "unstable-dynamic")]
-fn markdown_file_completer() -> ArgValueCandidates {
-    ArgValueCandidates::new(|| {
-        // Get current directory files
-        
+fn markdown_file_completer() -> ArgValueCompleter {
+    use std::ffi::OsStr;
+    use std::path::Path;
 
-        std::fs::read_dir(".")
-            .ok()
-            .into_iter()
-            .flat_map(|entries| entries.filter_map(Result::ok))
-            .filter_map(|entry| {
-                let path = entry.path();
-                let is_dir = path.is_dir();
-                let file_name = path.file_name()?.to_string_lossy().to_string();
+    struct MarkdownCompleter;
 
-                // Include directories and .md/.MD files
-                if is_dir {
-                    Some(CompletionCandidate::new(file_name).help(Some("directory".into())))
-                } else if let Some(ext) = path.extension() {
-                    let ext_lower = ext.to_string_lossy().to_lowercase();
-                    if ext_lower == "md" || ext_lower == "markdown" {
-                        Some(CompletionCandidate::new(file_name))
+    impl ValueCompleter for MarkdownCompleter {
+        fn complete(&self, current: &OsStr) -> Vec<CompletionCandidate> {
+            // Parse the input to extract the directory being completed
+            // e.g., "../docs/README" -> directory="../docs", prefix="README"
+            let input_str = current.to_string_lossy();
+            let input_path = Path::new(input_str.as_ref());
+
+            // Determine which directory to search
+            let search_dir: &Path;
+            let prefix: String;
+
+            if input_str.is_empty() {
+                // No input yet, show current directory
+                search_dir = Path::new(".");
+                prefix = String::new();
+            } else if input_str.ends_with('/') || input_str.ends_with('\\') {
+                // Ends with separator, show contents of that directory
+                search_dir = input_path;
+                prefix = String::new();
+            } else {
+                // Partial path, show completions in parent directory
+                search_dir = input_path.parent().unwrap_or(Path::new("."));
+                prefix = input_path
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+            };
+
+            // Read the target directory
+            let entries = match std::fs::read_dir(search_dir) {
+                Ok(entries) => entries,
+                Err(_) => return vec![],
+            };
+
+            entries
+                .filter_map(Result::ok)
+                .filter_map(|entry| {
+                    let path = entry.path();
+                    let is_dir = path.is_dir();
+                    let file_name = path.file_name()?.to_string_lossy().to_string();
+
+                    // Filter by prefix if provided
+                    if !prefix.is_empty()
+                        && !file_name
+                            .to_lowercase()
+                            .starts_with(&prefix.to_lowercase())
+                    {
+                        return None;
+                    }
+
+                    // Build the completion value relative to the original input
+                    let completion_value = if search_dir == Path::new(".") {
+                        file_name.clone()
+                    } else {
+                        search_dir.join(&file_name).to_string_lossy().to_string()
+                    };
+
+                    // Include directories and .md/.markdown files
+                    if is_dir {
+                        // Append trailing slash to directories for easier navigation
+                        let mut dir_completion = completion_value;
+                        if !dir_completion.ends_with('/') {
+                            dir_completion.push('/');
+                        }
+                        Some(
+                            CompletionCandidate::new(dir_completion)
+                                .help(Some("directory".into())),
+                        )
+                    } else if let Some(ext) = path.extension() {
+                        let ext_lower = ext.to_string_lossy().to_lowercase();
+                        if ext_lower == "md" || ext_lower == "markdown" {
+                            Some(CompletionCandidate::new(completion_value))
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     }
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-    })
+                })
+                .collect::<Vec<_>>()
+        }
+    }
+
+    ArgValueCompleter::new(MarkdownCompleter)
 }
 
 #[cfg(not(feature = "unstable-dynamic"))]

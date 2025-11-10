@@ -7,6 +7,7 @@ mod document;
 pub mod output;
 pub mod content;
 pub mod builder;
+pub mod utils;
 
 pub use document::{Document, Heading, HeadingNode};
 pub use output::{DocumentOutput, Section, Block, InlineElement};
@@ -33,7 +34,10 @@ pub fn parse_file(path: &Path) -> std::io::Result<Document> {
     Ok(parse_markdown(&content))
 }
 
-/// Parse markdown content and extract headings.
+/// Parse markdown content and extract headings with byte offsets.
+///
+/// Uses pulldown-cmark's `into_offset_iter()` to track exact byte positions
+/// of headings in the source document, eliminating the need for string searching.
 ///
 /// # Arguments
 ///
@@ -41,30 +45,32 @@ pub fn parse_file(path: &Path) -> std::io::Result<Document> {
 ///
 /// # Returns
 ///
-/// A `Document` containing the content and extracted headings.
+/// A `Document` containing the content and extracted headings with byte offsets.
 pub fn parse_markdown(content: &str) -> Document {
-    let parser = Parser::new(content);
+    let parser = Parser::new(content).into_offset_iter();
     let mut headings = Vec::new();
-    let mut current_heading: Option<(usize, String)> = None;
+    let mut current_heading: Option<(usize, String, usize)> = None;
     let mut in_heading = false;
 
-    for event in parser {
+    for (event, range) in parser {
         match event {
             Event::Start(Tag::Heading { level, .. }) => {
                 in_heading = true;
-                current_heading = Some((level as usize, String::new()));
+                // Store the byte offset where this heading starts
+                current_heading = Some((level as usize, String::new(), range.start));
             }
             Event::End(TagEnd::Heading(_)) => {
-                if let Some((level, text)) = current_heading.take() {
+                if let Some((level, text, offset)) = current_heading.take() {
                     headings.push(Heading {
                         level,
                         text: text.trim().to_string(),
+                        offset,
                     });
                 }
                 in_heading = false;
             }
             Event::Text(text) if in_heading => {
-                if let Some((_, ref mut heading_text)) = current_heading {
+                if let Some((_, ref mut heading_text, _)) = current_heading {
                     heading_text.push_str(&text);
                 }
             }
@@ -99,5 +105,103 @@ End"#;
         assert_eq!(doc.headings[0].text, "Title");
         assert_eq!(doc.headings[1].level, 2);
         assert_eq!(doc.headings[1].text, "Section 1");
+    }
+
+    #[test]
+    fn test_parse_headings_with_bold() {
+        let md = r#"# Title
+
+## **Bold** Section
+
+### Normal Subsection
+
+#### **1. Item** with number"#;
+
+        let doc = parse_markdown(md);
+        assert_eq!(doc.headings.len(), 4);
+
+        // Verify bold formatting is stripped from heading text
+        assert_eq!(doc.headings[1].text, "Bold Section");
+        assert_eq!(doc.headings[3].text, "1. Item with number");
+    }
+
+    #[test]
+    fn test_headings_store_offsets() {
+        let md = r#"# First
+Content here
+
+## Second
+More content"#;
+
+        let doc = parse_markdown(md);
+        assert_eq!(doc.headings.len(), 2);
+
+        // Verify offsets are stored
+        assert_eq!(doc.headings[0].offset, 0); // "# First" starts at byte 0
+        assert!(doc.headings[1].offset > doc.headings[0].offset);
+
+        // Verify we can use offsets to extract
+        let first_heading_text = &md[doc.headings[0].offset..doc.headings[0].offset + 7];
+        assert_eq!(first_heading_text, "# First");
+    }
+
+    #[test]
+    fn test_extract_section_with_bold_headings() {
+        let md = r#"# Main
+
+## **Bold** Section
+Content of bold section
+
+## Next Section
+Other content"#;
+
+        let doc = parse_markdown(md);
+        let content = doc.extract_section("Bold Section").unwrap();
+
+        // Should extract only the content between bold section and next section
+        assert!(content.contains("Content of bold section"));
+        assert!(!content.contains("Other content"));
+        assert!(!content.contains("## Next Section"));
+    }
+
+    #[test]
+    fn test_extract_section_with_numbered_bold_headings() {
+        let md = r#"# Architecture
+
+### Core Crates
+
+#### 1. **turbocli-parser** (850 LOC)
+Robustly parses POSIX-style help text.
+
+#### 2. **turbocli-config** (400 LOC)
+Multi-level configuration loading."#;
+
+        let doc = parse_markdown(md);
+
+        // Test extraction of heading with bold and numbers
+        let content = doc.extract_section("1. turbocli-parser (850 LOC)").unwrap();
+        assert!(content.contains("Robustly parses"));
+        assert!(!content.contains("Multi-level configuration"));
+
+        let content2 = doc.extract_section("2. turbocli-config (400 LOC)").unwrap();
+        assert!(content2.contains("Multi-level configuration"));
+        assert!(!content2.contains("Robustly parses"));
+    }
+
+    #[test]
+    fn test_extract_section_at_end_of_document() {
+        let md = r#"# First
+
+## Last Section
+Final content here
+More lines
+End of doc"#;
+
+        let doc = parse_markdown(md);
+        let content = doc.extract_section("Last Section").unwrap();
+
+        assert!(content.contains("Final content"));
+        assert!(content.contains("More lines"));
+        assert!(content.contains("End of doc"));
     }
 }

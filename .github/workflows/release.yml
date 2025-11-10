@@ -47,10 +47,16 @@ jobs:
           key: ${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
           shared-key: ${{ matrix.target }}
 
-      # Install cross for Linux ARM builds
+      # Install cargo-binstall for fast binary installation
+      - name: Install cargo-binstall
+        if: matrix.use_cross
+        uses: cargo-bins/cargo-binstall@main
+
+      # Install cross for Linux ARM builds (from main - no releases since v0.2.5 in 2023)
+      # Pinned to commit 8633ec6 (Nov 2025)
       - name: Install cross
         if: matrix.use_cross
-        run: cargo install cross --locked
+        run: cargo binstall cross --git https://github.com/cross-rs/cross --rev 8633ec65ab914015c2444c732568b414bd3c47cf --no-confirm
 
       # For Linux ARM, we need proper configuration
       - name: Create .cargo/config.toml for Linux ARM

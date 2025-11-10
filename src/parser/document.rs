@@ -17,13 +17,16 @@ pub struct Document {
 
 /// A heading in a markdown document.
 ///
-/// Represents a single heading with its level (1-6) and text content.
+/// Represents a single heading with its level (1-6), text content, and byte position.
 #[derive(Debug, Clone, Serialize)]
 pub struct Heading {
     /// Heading level (1 for #, 2 for ##, etc.)
     pub level: usize,
-    /// Heading text content
+    /// Heading text content (stripped of inline markdown formatting)
     pub text: String,
+    /// Byte offset where the heading starts in the source document
+    #[serde(skip_serializing)]
+    pub offset: usize,
 }
 
 /// A node in the heading tree.
@@ -96,68 +99,37 @@ impl Document {
             .collect()
     }
 
-    /// Extract the content of a section by heading text
+    /// Extract the content of a section by heading text.
+    ///
+    /// Uses stored byte offsets for fast, accurate extraction without string searching.
     pub fn extract_section(&self, heading_text: &str) -> Option<String> {
-        // Find the heading
-        let heading = self.find_heading(heading_text)?;
+        // Find the heading (O(n) scan of headings list)
+        let heading_idx = self
+            .headings
+            .iter()
+            .position(|h| h.text.to_lowercase() == heading_text.to_lowercase())?;
 
-        // Build the search pattern
-        let search = format!("{} {}", "#".repeat(heading.level), heading.text);
+        let heading = &self.headings[heading_idx];
 
-        // Find the start of the section
-        let start = self.content.find(&search)?;
+        // Start from the heading's stored byte offset
+        let start = heading.offset;
 
-        // Find the end (next heading of same or higher level, or end of document)
-        // But skip headings inside code blocks
-        let after = &self.content[start..];
+        // Find content start (skip the heading line itself)
+        let after_heading = &self.content[start..];
+        let content_start = after_heading.find('\n').map(|i| start + i + 1).unwrap_or(start);
 
-        let mut end = after.len();
-        let mut in_code_block = false;
+        // Find end: next heading at same or higher level
+        let end = self
+            .headings
+            .iter()
+            .skip(heading_idx + 1)
+            .find(|h| h.level <= heading.level)
+            .map(|h| h.offset)
+            .unwrap_or(self.content.len());
 
-        for (i, line) in after.lines().enumerate() {
-            if i == 0 {
-                continue; // Skip the heading line itself
-            }
-
-            // Track code block boundaries
-            if line.trim_start().starts_with("```") {
-                in_code_block = !in_code_block;
-            }
-
-            // Only check for headings when not in a code block
-            if !in_code_block {
-                if let Some(level) = get_heading_level(line) {
-                    if level <= heading.level {
-                        // Found next heading at same or higher level
-                        end = line.as_ptr() as usize - after.as_ptr() as usize;
-                        break;
-                    }
-                }
-            }
-        }
-
-        Some(after[..end].to_string())
+        // Extract section content
+        Some(self.content[content_start..end].trim().to_string())
     }
-}
-
-fn get_heading_level(line: &str) -> Option<usize> {
-    let trimmed = line.trim_start();
-    let mut level = 0;
-
-    for ch in trimmed.chars() {
-        if ch == '#' {
-            level += 1;
-        } else if ch.is_whitespace() {
-            if level > 0 {
-                return Some(level);
-            }
-            return None;
-        } else {
-            break;
-        }
-    }
-
-    None
 }
 
 fn build_heading_node(node_id: NodeId, arena: &Arena<Heading>) -> HeadingNode {

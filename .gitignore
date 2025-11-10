@@ -1,6 +1,15 @@
 .*
 .DS_Store
 .env
+
+# Certificates and keys (should NEVER be committed)
+*.p12
+*.cer
+*.pem
+*.key
+*.cert
+*.mobileprovision
+
 # Build artifacts
 /target
 *.swp

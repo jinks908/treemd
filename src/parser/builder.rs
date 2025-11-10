@@ -3,6 +3,7 @@
 use super::content::{parse_content, slugify};
 use super::document::{Document, HeadingNode};
 use super::output::*;
+use super::utils::get_heading_level;
 use std::path::Path;
 
 /// Build complete JSON output with nested sections and markdown intelligence
@@ -68,30 +69,28 @@ fn extract_section_content(
     heading: &super::document::Heading,
     full_content: &str,
 ) -> (String, usize, usize) {
-    // Find heading in content
-    let search = format!("{} {}", "#".repeat(heading.level), heading.text);
+    // Use stored byte offset for direct access
+    let offset = heading.offset;
 
-    if let Some(offset) = full_content.find(&search) {
-        // Calculate line number
-        let line = full_content[..offset].lines().count() + 1;
+    // Calculate line number from byte offset
+    let line = full_content[..offset].lines().count() + 1;
 
-        // Find end of section (next heading at same or higher level)
-        let after_heading = &full_content[offset..];
+    // Find content start (skip the heading line itself)
+    let after_heading = &full_content[offset..];
+    let content_start = after_heading.find('\n').map(|i| i + 1).unwrap_or(0);
+    let section_content = &after_heading[content_start..];
 
-        // Skip the heading line itself
-        let content_start = after_heading.find('\n').map(|i| i + 1).unwrap_or(0);
-        let section_content = &after_heading[content_start..];
+    // Find next heading (any level, since children are extracted separately)
+    let end = find_next_heading(section_content);
 
-        // Find next heading at same or higher level
-        let end = find_next_heading(section_content, heading.level);
-
-        (section_content[..end].trim().to_string(), offset + content_start, line + 1)
-    } else {
-        (String::new(), 0, 0)
-    }
+    (
+        section_content[..end].trim().to_string(),
+        offset + content_start,
+        line + 1,
+    )
 }
 
-fn find_next_heading(content: &str, current_level: usize) -> usize {
+fn find_next_heading(content: &str) -> usize {
     let mut in_code_block = false;
     let mut pos = 0;
 
@@ -102,36 +101,17 @@ fn find_next_heading(content: &str, current_level: usize) -> usize {
         }
 
         // Check for heading only if not in code block
-        if !in_code_block {
-            if let Some(level) = get_heading_level(line) {
-                if level <= current_level {
-                    // Found next heading - return position
-                    return pos;
-                }
+        if !in_code_block
+            && get_heading_level(line).is_some() {
+                // For nested JSON output, stop at ANY heading (child sections are
+                // extracted separately and included in the children array)
+                return pos;
             }
-        }
 
         pos += line.len() + 1; // +1 for newline
     }
 
     content.len()
-}
-
-fn get_heading_level(line: &str) -> Option<usize> {
-    let trimmed = line.trim_start();
-    let mut level = 0;
-
-    for ch in trimmed.chars() {
-        if ch == '#' {
-            level += 1;
-        } else if ch.is_whitespace() {
-            return if level > 0 { Some(level) } else { None };
-        } else {
-            break;
-        }
-    }
-
-    None
 }
 
 fn calculate_max_depth(tree: &[HeadingNode]) -> usize {

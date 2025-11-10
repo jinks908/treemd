@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2025-01-09
+
+### Fixed
+
+- **TUI section extraction with inline markdown** - Fixed critical bug where selecting headings with inline formatting (like `**bold**`) would display the entire document instead of just that section
+- **JSON output content extraction** - Fixed nested JSON output where parent sections incorrectly included child heading text in their content
+- **Parent directory completions** - Shell completions now work with `../` relative paths and absolute paths, enabling navigation to parent directories
+
+### Added
+
+- **Offset-based parsing** - Implemented pulldown-cmark's `into_offset_iter()` for direct byte offset tracking, eliminating fragile string searching
+- **Shared utilities module** - Created `parser/utils.rs` with `strip_markdown_inline()` and `get_heading_level()` helpers
+- **Comprehensive test suite** - Added 8+ new tests covering bold headings, numbered headings, offset tracking, and section extraction edge cases
+- **Context-aware completions** - Upgraded from `ArgValueCandidates` to `ArgValueCompleter` for dynamic path-based completions
+
+### Changed
+
+- **Heading struct enhancement** - Added `offset: usize` field to store byte position for O(1) section extraction
+- **Parser optimization** - Changed from O(n²) string searching to O(n) offset-based extraction
+- **Code deduplication** - Eliminated 40+ lines of duplicate code by centralizing utilities
+- **Completion logic** - Completions now parse input path to determine target directory and filter appropriately
+
+### Technical
+
+- **DRY principle compliance** - Removed duplicate `strip_markdown_inline` and `get_heading_level` functions
+- **Best practices adoption** - Using pulldown-cmark's built-in offset tracking as recommended by Rust markdown ecosystem
+- **Performance improvement** - Section extraction now O(1) lookup instead of O(n) string search
+- **Robustness improvement** - Handles all inline markdown formatting (bold, italic, code, strikethrough) correctly
+- **Architecture cleanup** - Better separation of concerns with dedicated utils module
+- **Zero clippy warnings** - Clean codebase with all lints addressed
+
 ## [0.1.5] - 2025-11-09
 
 ### Fixed
@@ -26,8 +57,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Updated GitHub Actions** - Upgraded all actions to latest major versions for automatic updates and security
+- **Optimized cross installation** - Use cargo-binstall for 100x faster installation (2s vs 3m39s)
+  - Install from main branch (cross-rs hasn't released since v0.2.5 in Feb 2023)
+  - Pinned to commit 8633ec6 (Nov 2025) for reproducibility
+  - Follows 2025 best practices for actively-developed-but-not-released projects
 
- ### Technical
+### Technical
 
 - Unix: tar.gz archives preserve executable permissions through artifact system
 - Windows: zip archives created with PowerShell's Compress-Archive

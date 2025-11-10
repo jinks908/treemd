@@ -158,11 +158,9 @@ fn render_content(frame: &mut Frame, app: &App, area: Rect) {
 
     // Get content for selected section
     let content_text = if let Some(heading_text) = app.selected_heading_text() {
-        if let Some(heading) = app.document.find_heading(heading_text) {
-            extract_section_content(&app.document.content, heading_text, heading.level)
-        } else {
-            app.document.content.clone()
-        }
+        app.document
+            .extract_section(heading_text)
+            .unwrap_or_else(|| app.document.content.clone())
     } else {
         app.document.content.clone()
     };
@@ -419,46 +417,6 @@ fn centered_area(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
     let [area] = vertical.areas(area);
     let [area] = horizontal.areas(area);
     area
-}
-
-fn extract_section_content(full_content: &str, heading_text: &str, level: usize) -> String {
-    let search = format!("{} {}", "#".repeat(level), heading_text);
-
-    if let Some(start) = full_content.find(&search) {
-        let after = &full_content[start..];
-
-        // Find next heading at same or higher level (but skip headings inside code blocks)
-        let lines: Vec<&str> = after.lines().collect();
-        let mut result = Vec::new();
-        let mut in_code_block = false;
-
-        for (i, line) in lines.iter().enumerate() {
-            // Track code block boundaries
-            if line.trim_start().starts_with("```") {
-                in_code_block = !in_code_block;
-            }
-
-            // Only check for headings when not in a code block
-            if i > 0 && !in_code_block && line.starts_with('#') {
-                // Check if this is a heading at same or higher level
-                let trimmed = line.trim_start();
-                let heading_level = trimmed.chars().take_while(|&c| c == '#').count();
-
-                // Verify it's a valid heading (has space after #)
-                if heading_level > 0 && heading_level <= level {
-                    let after_hashes = trimmed.chars().nth(heading_level);
-                    if after_hashes.is_some_and(|c| c.is_whitespace()) {
-                        break;
-                    }
-                }
-            }
-            result.push(*line);
-        }
-
-        result.join("\n")
-    } else {
-        full_content.to_string()
-    }
 }
 
 use crate::tui::syntax::SyntaxHighlighter;
