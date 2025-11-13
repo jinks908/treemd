@@ -35,6 +35,8 @@ A markdown navigator with tree-based structural navigation. Like `tree`, but int
 - **Multiple formats** - Plain text, JSON output
 - **Statistics** - Count headings by level
 
+**treemd** is incredibly powerful as a CLI utility. Using the `--tree` visualizations with `--section` enables rapid piecewise consumption of even the largest `.md` files.
+
 ## Installation
 
 ### From crates.io
@@ -211,8 +213,6 @@ Artifacts will be in `target/release-artifacts/`.
 **macOS:** Pre-built binaries are signed with Developer ID and notarized by Apple, so you won't see any Gatekeeper warnings.
 
 **Linux & Windows:** Binaries are provided as-is. These are standard CLI tools that work on all systems.
-
-For details on setting up code signing for other platforms or local builds, see `PLATFORM_SIGNING.md`.
 
 ## Contributing
 
