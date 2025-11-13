@@ -18,8 +18,11 @@ A markdown navigator with tree-based structural navigation. Like `tree`, but int
 ### Interactive TUI
 
 - **Dual-pane interface** - Navigate outline while viewing content
+- **Live editing** - Edit files in default editor with auto-reload (respects $VISUAL/$EDITOR)
+- **Link following** - Follow markdown links with visual popup, supports anchor/file/wikilink/external URLs
+- **Navigation history** - Back/forward between files with full state preservation
 - **Syntax highlighting** - 50+ languages with full syntect integration
-- **Vim-style navigation** - j/k, g/G, d/u for efficient browsing
+- **Vim-style navigation** - j/k, g/G, d/u, p (parent) for efficient browsing
 - **Search & filter** - Press `/` to filter headings in real-time
 - **Collapsible tree** - Expand/collapse sections with Space/Enter
 - **Bookmarks** - Mark positions (`m`) and jump back (`'`)
@@ -68,6 +71,7 @@ treemd README.md
 *Navigation:*
 - `j/k` or `↓/↑` - Navigate up/down
 - `g/G` - Jump to top/bottom
+- `p` - Jump to parent heading
 - `d/u` - Page down/up (in content)
 - `Tab` - Switch between outline and content
 - `1-9` - Jump to heading 1-9 (instant access)
@@ -82,22 +86,43 @@ treemd README.md
 - `m` - Set bookmark at current position
 - `'` - Jump to bookmarked position
 
+*Link Following:*
+- `f` - Enter link follow mode (shows popup with all links)
+- `Tab`/`Shift+Tab` - Navigate through links
+- `j/k` or `↓/↑` - Navigate links (in link mode)
+- `1-9` - Jump directly to link by number
+- `p` - Jump to parent heading's links (stays in link mode)
+- `Enter` - Follow selected link (opens browser, loads file, or jumps to anchor)
+- `b`/`Backspace` - Go back to previous file
+- `Shift+F` - Go forward in navigation history
+- `Esc` - Exit link follow mode
+
+*Editing & System:*
+- `e` - Edit current file in default editor (respects $VISUAL or $EDITOR)
+- `t` - Cycle color theme
+- `y` - Copy current section content to clipboard
+- `Y` - Copy anchor link to clipboard
+
 *Search & Help:*
 - `/` - Search/filter headings (type to filter, Esc to clear)
 - `?` - Toggle help overlay
 - `q/Esc` - Quit
 
 **Interface Features:**
+- **Live editing** - Edit files in your default editor and auto-reload (press `e`)
+- **Link following popup** - Visual navigator shows all links with highlighting (press `f`)
+- **Multi-file navigation** - Load files via links with full history (back/forward)
+- **External URL opening** - Opens links in default browser automatically
 - **Syntax-highlighted code blocks** - 50+ languages supported
 - **Inline formatting** - Bold, italic, inline code with colors
 - **Real-time search** - Filter headings as you type (press `/`)
 - **Toggle outline** - Hide for full-width reading (press `w`)
 - **Adjustable layout** - Resize outline 20%/30%/40% (press `[` `]`)
-- **Quick navigation** - Jump to any heading 1-9 instantly
+- **Quick navigation** - Jump to any heading 1-9 instantly, parent with `p`
 - **Bookmarks** - Mark and return to positions (press `m` and `'`)
 - **Color-coded headings** - 5 distinct levels
 - **Scrollbars** - Position indicators on both panes
-- **Smart status bar** - Shows position, outline width, bookmark status
+- **Smart status bar** - Shows position, link details, navigation history
 - **Help overlay** - Always available (press `?`)
 
 ### CLI Mode (Non-Interactive)

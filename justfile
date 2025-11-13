@@ -13,12 +13,16 @@ release:
     cargo build --release
 
 # Run the project with a test file
-run FILE="/tmp/test_multi_codeblock.md":
+run FILE="README.md":
     cargo run -- {{FILE}}
 
 # Run the release build with a test file
-run-release FILE="/tmp/test_multi_codeblock.md":
+run-release FILE="README.md":
     ./target/release/treemd {{FILE}}
+
+# Run with the link following test file
+run-links:
+    cargo run -- test_links.md
 
 # Run all tests
 test:
@@ -50,7 +54,9 @@ clean:
 
 # Install the binary to ~/.cargo/bin
 install:
-    cargo install --path .
+    @echo "Installing treemd..."
+    cargo install --path . --force
+    @echo "✅ Installation complete! Run 'treemd --help' to get started."
 
 # Uninstall the binary
 uninstall:
@@ -67,6 +73,18 @@ outdated:
 # Full CI check: format, lint, test, build
 ci: fmt-check lint test release
     @echo "✅ All CI checks passed!"
+
+# Quick test of link following feature
+test-links: install
+    @echo "Testing link following feature..."
+    @echo "1. Opening test_links.md"
+    @echo "2. Press 'f' to enter link mode"
+    @echo "3. Press 'Tab' to cycle links"
+    @echo "4. Press 'Enter' to follow"
+    @echo "5. Press 'b' to go back"
+    @echo "6. Press '?' to see help"
+    @echo ""
+    treemd test_links.md
 
 # Watch and rebuild on file changes (requires cargo-watch)
 watch:
