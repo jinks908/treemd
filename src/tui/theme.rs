@@ -1,3 +1,4 @@
+use crate::tui::terminal_compat::ColorMode;
 use ratatui::style::{Color, Modifier, Style};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -335,5 +336,65 @@ impl Theme {
 
     pub fn code_fence_style(&self) -> Style {
         Style::default().fg(self.code_fence)
+    }
+
+    /// Apply color mode to theme (convert RGB to 256-color if needed)
+    pub fn with_color_mode(mut self, mode: ColorMode) -> Self {
+        match mode {
+            ColorMode::Rgb => self,
+            ColorMode::Indexed256 => {
+                self.background = rgb_to_256(self.background);
+                self.foreground = rgb_to_256(self.foreground);
+                self.heading_1 = rgb_to_256(self.heading_1);
+                self.heading_2 = rgb_to_256(self.heading_2);
+                self.heading_3 = rgb_to_256(self.heading_3);
+                self.heading_4 = rgb_to_256(self.heading_4);
+                self.heading_5 = rgb_to_256(self.heading_5);
+                self.border_focused = rgb_to_256(self.border_focused);
+                self.border_unfocused = rgb_to_256(self.border_unfocused);
+                self.selection_bg = rgb_to_256(self.selection_bg);
+                self.selection_fg = rgb_to_256(self.selection_fg);
+                self.status_bar_bg = rgb_to_256(self.status_bar_bg);
+                self.status_bar_fg = rgb_to_256(self.status_bar_fg);
+                self.inline_code_fg = rgb_to_256(self.inline_code_fg);
+                self.inline_code_bg = rgb_to_256(self.inline_code_bg);
+                self.bold_fg = rgb_to_256(self.bold_fg);
+                self.italic_fg = rgb_to_256(self.italic_fg);
+                self.list_bullet = rgb_to_256(self.list_bullet);
+                self.blockquote_border = rgb_to_256(self.blockquote_border);
+                self.blockquote_fg = rgb_to_256(self.blockquote_fg);
+                self.code_fence = rgb_to_256(self.code_fence);
+                self
+            }
+        }
+    }
+}
+
+/// Convert RGB color to nearest 256-color palette entry
+fn rgb_to_256(color: Color) -> Color {
+    match color {
+        Color::Rgb(r, g, b) => {
+            // Check if it's grayscale
+            if r == g && g == b {
+                // Map to grayscale ramp (232-255)
+                if r < 8 {
+                    return Color::Indexed(16); // Black
+                }
+                if r > 247 {
+                    return Color::Indexed(231); // White
+                }
+                let gray_index = ((r as f32 - 8.0) / 10.0).round() as u8;
+                return Color::Indexed(232 + gray_index);
+            }
+
+            // Map to 6x6x6 RGB cube (16-231)
+            let r_index = (r as f32 / 51.0).round() as u8;
+            let g_index = (g as f32 / 51.0).round() as u8;
+            let b_index = (b as f32 / 51.0).round() as u8;
+
+            Color::Indexed(16 + 36 * r_index + 6 * g_index + b_index)
+        }
+        // Already indexed or named color - pass through
+        other => other,
     }
 }
