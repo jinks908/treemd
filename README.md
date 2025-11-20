@@ -56,6 +56,15 @@ cd treemd
 cargo install --path .
 ```
 
+### Using a package manager
+
+`treemd` is available as a native package on NetBSD.
+To install it, simply run:
+
+```bash
+pkgin install treemd
+```
+
 ## Usage
 
 ### TUI Mode (Interactive - Default)
