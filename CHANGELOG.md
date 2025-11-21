@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2025-11-21
+
+### Fixed
+
+- **Theme Color Mode Application** - Improved theme initialization order for more consistent color rendering
+  - Color mode now applied before custom colors for better accuracy
+  - Theme-specific 256-color variants now correctly loaded based on color mode
+  - Fixes color inconsistencies when using custom theme colors with 256-color fallback
+
+### Changed
+
+- **Code Formatting** - Applied consistent code formatting throughout codebase
+- **Documentation** - Enhanced README with more detailed interactive mode instructions
+  - Added comprehensive keyboard shortcuts for interactive mode
+  - Clarified table navigation and editing workflow
+  - Better organization of feature descriptions
+
+### Technical
+
+- **Theme Architecture** (`src/tui/theme.rs`)
+  - Added `from_name_256()` method to load theme-specific 256-color variants
+  - Reordered `with_color_mode()` to apply before `with_custom_colors()`
+  - Each theme now has dedicated 256-color palette matching official theme colors
+  - Better color accuracy in 256-color terminals
+
+- **App State** (`src/tui/app.rs`)
+  - Updated theme initialization: `from_name() → with_color_mode() → with_custom_colors()`
+  - Custom colors now properly respect color mode constraints
+  - Improved formatting consistency
+
 ## [0.3.0] - 2025-11-20
 
 ### Added

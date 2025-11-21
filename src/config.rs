@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub ui: UiConfig,
@@ -122,15 +122,6 @@ impl ColorValue {
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            ui: UiConfig::default(),
-            terminal: TerminalConfig::default(),
-            theme: CustomThemeConfig::default(),
-        }
-    }
-}
 
 impl Default for UiConfig {
     fn default() -> Self {

@@ -18,6 +18,9 @@ A markdown navigator with tree-based structural navigation. Like `tree`, but int
 ### Interactive TUI
 
 - **Dual-pane interface** - Navigate outline while viewing content
+- **Interactive mode** - Navigate, edit, and interact with all markdown elements (tables, checkboxes, links, code blocks)
+- **Table navigation & editing** - Navigate cells with vim keys (hjkl), edit cell content in-place, copy cells/rows/tables
+- **Checkbox toggling** - Toggle task list items with instant file updates
 - **Live editing** - Edit files in default editor with auto-reload (respects $VISUAL/$EDITOR)
 - **Link following** - Follow markdown links with visual popup, supports anchor/file/wikilink/external URLs
 - **Navigation history** - Back/forward between files with full state preservation
@@ -27,7 +30,7 @@ A markdown navigator with tree-based structural navigation. Like `tree`, but int
 - **Collapsible tree** - Expand/collapse sections with Space/Enter
 - **Bookmarks** - Mark positions (`m`) and jump back (`'`)
 - **Adjustable layout** - Toggle outline visibility, resize panes
-- **Rich rendering** - Bold, italic, inline code, lists, blockquotes, code blocks
+- **Rich rendering** - Bold, italic, inline code, lists, blockquotes, code blocks, tables with box-drawing characters
 
 ### CLI Mode
 
@@ -106,6 +109,23 @@ treemd README.md
 - `Shift+F` - Go forward in navigation history
 - `Esc` - Exit link follow mode
 
+*Interactive Mode:*
+- `i` - Enter interactive mode (navigate all interactive elements)
+- `Tab`/`j`/`k` or `↓/↑` - Navigate between elements
+- `Enter` - Activate element (toggle checkbox, follow link, enter table mode)
+- `Space` - Toggle checkboxes or details blocks
+- `y` - Copy element content (code blocks, table cells, links)
+- `Esc` - Exit interactive mode
+
+*Table Navigation (in interactive mode):*
+- `Enter` on table - Enter table navigation mode
+- `h`/`j`/`k`/`l` or arrow keys - Navigate table cells
+- `y` - Copy current cell content
+- `Y` - Copy current row (tab-separated)
+- `r` - Copy entire table as markdown
+- `Enter` on cell - Edit cell content
+- `Esc` - Exit table navigation mode
+
 *Editing & System:*
 - `e` - Edit current file in default editor (respects $VISUAL or $EDITOR)
 - `t` - Cycle color theme
@@ -119,6 +139,9 @@ treemd README.md
 
 **Interface Features:**
 - **Live editing** - Edit files in your default editor and auto-reload (press `e`)
+- **Interactive mode** - Navigate and interact with all markdown elements (press `i`)
+- **Table editing** - Navigate cells with vim keys, edit cell content in-place
+- **Checkbox toggling** - Toggle task list items and save changes to file
 - **Link following popup** - Visual navigator shows all links with highlighting (press `f`)
 - **Multi-file navigation** - Load files via links with full history (back/forward)
 - **External URL opening** - Opens links in default browser automatically

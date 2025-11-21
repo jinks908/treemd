@@ -97,70 +97,110 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                             }
                             KeyCode::Char('h') | KeyCode::Left => {
                                 // Extract table dimensions first
-                                let (rows, cols) = if let Some(element) = app.interactive_state.current_element() {
-                                    if let crate::tui::interactive::ElementType::Table { rows, cols, .. } = &element.element_type {
+                                let (rows, cols) = if let Some(element) =
+                                    app.interactive_state.current_element()
+                                {
+                                    if let crate::tui::interactive::ElementType::Table {
+                                        rows,
+                                        cols,
+                                        ..
+                                    } = &element.element_type
+                                    {
                                         Some((*rows, *cols))
                                     } else {
                                         None
                                     }
                                 } else {
                                     None
-                                }.unwrap_or((0, 0));
+                                }
+                                .unwrap_or((0, 0));
 
                                 if cols > 0 {
                                     app.interactive_state.table_move_left();
-                                    app.status_message = Some(app.interactive_state.table_status_text(rows + 1, cols));
+                                    app.status_message = Some(
+                                        app.interactive_state.table_status_text(rows + 1, cols),
+                                    );
                                 }
                             }
                             KeyCode::Char('j') | KeyCode::Down => {
                                 // Extract table dimensions first
-                                let (rows, cols) = if let Some(element) = app.interactive_state.current_element() {
-                                    if let crate::tui::interactive::ElementType::Table { rows, cols, .. } = &element.element_type {
+                                let (rows, cols) = if let Some(element) =
+                                    app.interactive_state.current_element()
+                                {
+                                    if let crate::tui::interactive::ElementType::Table {
+                                        rows,
+                                        cols,
+                                        ..
+                                    } = &element.element_type
+                                    {
                                         Some((*rows, *cols))
                                     } else {
                                         None
                                     }
                                 } else {
                                     None
-                                }.unwrap_or((0, 0));
+                                }
+                                .unwrap_or((0, 0));
 
                                 if rows > 0 {
                                     app.interactive_state.table_move_down(rows + 1);
-                                    app.status_message = Some(app.interactive_state.table_status_text(rows + 1, cols));
+                                    app.status_message = Some(
+                                        app.interactive_state.table_status_text(rows + 1, cols),
+                                    );
                                 }
                             }
                             KeyCode::Char('k') | KeyCode::Up => {
                                 // Extract table dimensions first
-                                let (rows, cols) = if let Some(element) = app.interactive_state.current_element() {
-                                    if let crate::tui::interactive::ElementType::Table { rows, cols, .. } = &element.element_type {
+                                let (rows, cols) = if let Some(element) =
+                                    app.interactive_state.current_element()
+                                {
+                                    if let crate::tui::interactive::ElementType::Table {
+                                        rows,
+                                        cols,
+                                        ..
+                                    } = &element.element_type
+                                    {
                                         Some((*rows, *cols))
                                     } else {
                                         None
                                     }
                                 } else {
                                     None
-                                }.unwrap_or((0, 0));
+                                }
+                                .unwrap_or((0, 0));
 
                                 if rows > 0 {
                                     app.interactive_state.table_move_up();
-                                    app.status_message = Some(app.interactive_state.table_status_text(rows + 1, cols));
+                                    app.status_message = Some(
+                                        app.interactive_state.table_status_text(rows + 1, cols),
+                                    );
                                 }
                             }
                             KeyCode::Char('l') | KeyCode::Right => {
                                 // Extract table dimensions first
-                                let (rows, cols) = if let Some(element) = app.interactive_state.current_element() {
-                                    if let crate::tui::interactive::ElementType::Table { rows, cols, .. } = &element.element_type {
+                                let (rows, cols) = if let Some(element) =
+                                    app.interactive_state.current_element()
+                                {
+                                    if let crate::tui::interactive::ElementType::Table {
+                                        rows,
+                                        cols,
+                                        ..
+                                    } = &element.element_type
+                                    {
                                         Some((*rows, *cols))
                                     } else {
                                         None
                                     }
                                 } else {
                                     None
-                                }.unwrap_or((0, 0));
+                                }
+                                .unwrap_or((0, 0));
 
                                 if cols > 0 {
                                     app.interactive_state.table_move_right(cols);
-                                    app.status_message = Some(app.interactive_state.table_status_text(rows + 1, cols));
+                                    app.status_message = Some(
+                                        app.interactive_state.table_status_text(rows + 1, cols),
+                                    );
                                 }
                             }
                             KeyCode::Char('y') => {

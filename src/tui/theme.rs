@@ -53,6 +53,19 @@ impl Theme {
         }
     }
 
+    pub fn from_name_256(name: ThemeName) -> Self {
+        match name {
+            ThemeName::OceanDark => Self::ocean_dark_256(),
+            ThemeName::Nord => Self::nord_256(),
+            ThemeName::Dracula => Self::dracula_256(),
+            ThemeName::Solarized => Self::solarized_256(),
+            ThemeName::Monokai => Self::monokai_256(),
+            ThemeName::Gruvbox => Self::gruvbox_256(),
+            ThemeName::TokyoNight => Self::tokyo_night_256(),
+            ThemeName::CatppuccinMocha => Self::catppuccin_mocha_256(),
+        }
+    }
+
     /// Base16 Ocean Dark - Default theme
     pub fn ocean_dark() -> Self {
         Self {
@@ -277,6 +290,232 @@ impl Theme {
         }
     }
 
+    // ========== 256-Color Optimized Variants ==========
+
+    /// Ocean Dark - 256-color optimized variant
+    pub fn ocean_dark_256() -> Self {
+        Self {
+            name: "Ocean Dark",
+            background: Color::Indexed(236), // ~(43, 48, 59)
+            foreground: Color::Indexed(188), // ~(192, 197, 206)
+            heading_1: Color::Indexed(117),  // Bright blue
+            heading_2: Color::Indexed(153),  // Light blue
+            heading_3: Color::Indexed(121),  // Cyan-green
+            heading_4: Color::Indexed(192),  // Light green-yellow
+            heading_5: Color::Indexed(250),  // Light gray
+            border_focused: Color::Cyan,
+            border_unfocused: Color::DarkGray,
+            selection_bg: Color::Indexed(237),
+            selection_fg: Color::White,
+            status_bar_bg: Color::Indexed(238),
+            status_bar_fg: Color::Indexed(188),
+            inline_code_fg: Color::Indexed(222), // Light orange
+            inline_code_bg: Color::Indexed(235),
+            bold_fg: Color::White,
+            italic_fg: Color::Indexed(177), // Light purple
+            list_bullet: Color::Cyan,
+            blockquote_border: Color::Indexed(246),
+            blockquote_fg: Color::Indexed(246),
+            code_fence: Color::Indexed(152),
+        }
+    }
+
+    /// Nord - 256-color optimized variant based on official Nord palette
+    pub fn nord_256() -> Self {
+        Self {
+            name: "Nord",
+            background: Color::Indexed(236), // nord0 approximation
+            foreground: Color::Indexed(252), // nord4 approximation
+            heading_1: Color::Indexed(109),  // nord8 Frost cyan
+            heading_2: Color::Indexed(109),  // nord7 Frost teal
+            heading_3: Color::Indexed(150),  // nord14 Aurora green
+            heading_4: Color::Indexed(222),  // nord13 Aurora yellow
+            heading_5: Color::Indexed(139),  // nord15 Aurora purple
+            border_focused: Color::Indexed(109), // Frost cyan
+            border_unfocused: Color::Indexed(238),
+            selection_bg: Color::Indexed(238),
+            selection_fg: Color::Indexed(253),
+            status_bar_bg: Color::Indexed(238),
+            status_bar_fg: Color::Indexed(252),
+            inline_code_fg: Color::Indexed(222), // Aurora yellow
+            inline_code_bg: Color::Indexed(238),
+            bold_fg: Color::Indexed(253),
+            italic_fg: Color::Indexed(139),   // Aurora purple
+            list_bullet: Color::Indexed(109), // Frost cyan
+            blockquote_border: Color::Indexed(240),
+            blockquote_fg: Color::Indexed(240),
+            code_fence: Color::Indexed(109),
+        }
+    }
+
+    /// Dracula - 256-color optimized variant based on official palette
+    pub fn dracula_256() -> Self {
+        Self {
+            name: "Dracula",
+            background: Color::Indexed(236),     // Background
+            foreground: Color::Indexed(231),     // Foreground
+            heading_1: Color::Indexed(117),      // Cyan
+            heading_2: Color::Indexed(84),       // Green
+            heading_3: Color::Indexed(215),      // Orange
+            heading_4: Color::Indexed(212),      // Pink
+            heading_5: Color::Indexed(141),      // Purple
+            border_focused: Color::Indexed(141), // Purple
+            border_unfocused: Color::Indexed(238),
+            selection_bg: Color::Indexed(238),
+            selection_fg: Color::Indexed(231),
+            status_bar_bg: Color::Indexed(238),
+            status_bar_fg: Color::Indexed(231),
+            inline_code_fg: Color::Indexed(228), // Yellow
+            inline_code_bg: Color::Indexed(238),
+            bold_fg: Color::White,
+            italic_fg: Color::Indexed(141),   // Purple
+            list_bullet: Color::Indexed(117), // Cyan
+            blockquote_border: Color::Indexed(61),
+            blockquote_fg: Color::Indexed(61),
+            code_fence: Color::Indexed(141), // Purple
+        }
+    }
+
+    /// Solarized - 256-color degraded variant
+    pub fn solarized_256() -> Self {
+        Self {
+            name: "Solarized",
+            background: Color::Indexed(234),    // Base03
+            foreground: Color::Indexed(244),    // Base0
+            heading_1: Color::Indexed(33),      // Blue
+            heading_2: Color::Indexed(37),      // Cyan
+            heading_3: Color::Indexed(64),      // Green
+            heading_4: Color::Indexed(136),     // Yellow
+            heading_5: Color::Indexed(166),     // Orange
+            border_focused: Color::Indexed(33), // Blue
+            border_unfocused: Color::Indexed(235),
+            selection_bg: Color::Indexed(235), // Base02
+            selection_fg: Color::Indexed(246), // Base1
+            status_bar_bg: Color::Indexed(235),
+            status_bar_fg: Color::Indexed(244),
+            inline_code_fg: Color::Indexed(136), // Yellow
+            inline_code_bg: Color::Indexed(235),
+            bold_fg: Color::Indexed(246),
+            italic_fg: Color::Indexed(61),   // Violet
+            list_bullet: Color::Indexed(37), // Cyan
+            blockquote_border: Color::Indexed(240),
+            blockquote_fg: Color::Indexed(240),
+            code_fence: Color::Indexed(37), // Cyan
+        }
+    }
+
+    /// Monokai - 256-color optimized variant
+    pub fn monokai_256() -> Self {
+        Self {
+            name: "Monokai",
+            background: Color::Indexed(235),    // ~(39, 40, 34)
+            foreground: Color::Indexed(231),    // ~(248, 248, 242)
+            heading_1: Color::Indexed(81),      // Cyan
+            heading_2: Color::Indexed(148),     // Green
+            heading_3: Color::Indexed(208),     // Orange
+            heading_4: Color::Indexed(197),     // Pink
+            heading_5: Color::Indexed(141),     // Purple
+            border_focused: Color::Indexed(81), // Cyan
+            border_unfocused: Color::Indexed(237),
+            selection_bg: Color::Indexed(237),
+            selection_fg: Color::Indexed(231),
+            status_bar_bg: Color::Indexed(237),
+            status_bar_fg: Color::Indexed(231),
+            inline_code_fg: Color::Indexed(186), // Yellow
+            inline_code_bg: Color::Indexed(237),
+            bold_fg: Color::White,
+            italic_fg: Color::Indexed(81),   // Cyan
+            list_bullet: Color::Indexed(81), // Cyan
+            blockquote_border: Color::Indexed(241),
+            blockquote_fg: Color::Indexed(241),
+            code_fence: Color::Indexed(81), // Cyan
+        }
+    }
+
+    /// Gruvbox - 256-color optimized variant (already looks good, refined further)
+    pub fn gruvbox_256() -> Self {
+        Self {
+            name: "Gruvbox",
+            background: Color::Indexed(235),     // Dark background
+            foreground: Color::Indexed(223),     // ~(235, 219, 178)
+            heading_1: Color::Indexed(108),      // Aqua
+            heading_2: Color::Indexed(142),      // Green
+            heading_3: Color::Indexed(214),      // Yellow
+            heading_4: Color::Indexed(208),      // Orange
+            heading_5: Color::Indexed(175),      // Purple
+            border_focused: Color::Indexed(142), // Green
+            border_unfocused: Color::Indexed(237),
+            selection_bg: Color::Indexed(237),
+            selection_fg: Color::Indexed(223),
+            status_bar_bg: Color::Indexed(237),
+            status_bar_fg: Color::Indexed(223),
+            inline_code_fg: Color::Indexed(214), // Yellow
+            inline_code_bg: Color::Indexed(237),
+            bold_fg: Color::Indexed(229),     // Light
+            italic_fg: Color::Indexed(175),   // Purple
+            list_bullet: Color::Indexed(108), // Aqua
+            blockquote_border: Color::Indexed(243),
+            blockquote_fg: Color::Indexed(243),
+            code_fence: Color::Indexed(108), // Aqua
+        }
+    }
+
+    /// Tokyo Night - 256-color optimized variant
+    pub fn tokyo_night_256() -> Self {
+        Self {
+            name: "Tokyo Night",
+            background: Color::Indexed(234), // Very dark blue-black
+            foreground: Color::Indexed(189), // Soft blue-white
+            heading_1: Color::Indexed(110),  // Blue
+            heading_2: Color::Indexed(117),  // Bright cyan
+            heading_3: Color::Indexed(150),  // Green
+            heading_4: Color::Indexed(179),  // Yellow
+            heading_5: Color::Indexed(141),  // Purple
+            border_focused: Color::Indexed(110), // Blue
+            border_unfocused: Color::Indexed(237),
+            selection_bg: Color::Indexed(237),
+            selection_fg: Color::Indexed(189),
+            status_bar_bg: Color::Indexed(236),
+            status_bar_fg: Color::Indexed(189),
+            inline_code_fg: Color::Indexed(215), // Orange
+            inline_code_bg: Color::Indexed(237),
+            bold_fg: Color::White,
+            italic_fg: Color::Indexed(141),   // Purple
+            list_bullet: Color::Indexed(117), // Cyan
+            blockquote_border: Color::Indexed(243),
+            blockquote_fg: Color::Indexed(189),
+            code_fence: Color::Indexed(117), // Cyan
+        }
+    }
+
+    /// Catppuccin Mocha - 256-color optimized variant
+    pub fn catppuccin_mocha_256() -> Self {
+        Self {
+            name: "Catppuccin Mocha",
+            background: Color::Indexed(235),     // Base
+            foreground: Color::Indexed(189),     // Text
+            heading_1: Color::Indexed(117),      // Blue
+            heading_2: Color::Indexed(153),      // Sky
+            heading_3: Color::Indexed(151),      // Green
+            heading_4: Color::Indexed(223),      // Yellow
+            heading_5: Color::Indexed(183),      // Mauve
+            border_focused: Color::Indexed(117), // Blue
+            border_unfocused: Color::Indexed(238),
+            selection_bg: Color::Indexed(238),
+            selection_fg: Color::Indexed(189),
+            status_bar_bg: Color::Indexed(234), // Mantle
+            status_bar_fg: Color::Indexed(189),
+            inline_code_fg: Color::Indexed(216), // Peach
+            inline_code_bg: Color::Indexed(237),
+            bold_fg: Color::White,
+            italic_fg: Color::Indexed(218),   // Pink
+            list_bullet: Color::Indexed(116), // Teal
+            blockquote_border: Color::Indexed(242),
+            blockquote_fg: Color::Indexed(245),
+            code_fence: Color::Indexed(116), // Sapphire
+        }
+    }
+
     pub fn heading_color(&self, level: usize) -> Color {
         match level {
             1 => self.heading_1,
@@ -372,13 +611,22 @@ impl Theme {
     }
 
     /// Apply custom color overrides from config
-    pub fn with_custom_colors(mut self, custom: &crate::config::CustomThemeConfig) -> Self {
+    pub fn with_custom_colors(
+        mut self,
+        custom: &crate::config::CustomThemeConfig,
+        mode: ColorMode,
+    ) -> Self {
         // Helper macro to apply color override if present
         macro_rules! apply_color {
             ($field:ident) => {
                 if let Some(ref color_value) = custom.$field {
                     if let Some(color) = color_value.to_color() {
-                        self.$field = color;
+                        // Quantize custom RGB colors if in 256-color mode
+                        self.$field = if matches!(mode, ColorMode::Indexed256) {
+                            rgb_to_256(color)
+                        } else {
+                            color
+                        };
                     }
                 }
             };
@@ -409,8 +657,20 @@ impl Theme {
         self
     }
 
-    /// Apply color mode to theme (convert RGB to 256-color if needed)
-    pub fn with_color_mode(mut self, mode: ColorMode) -> Self {
+    /// Apply color mode to theme (use optimized 256-color variants or convert RGB)
+    pub fn with_color_mode(self, mode: ColorMode, theme_name: ThemeName) -> Self {
+        match mode {
+            ColorMode::Rgb => self,
+            ColorMode::Indexed256 => {
+                // Use optimized 256-color variants for built-in themes
+                Theme::from_name_256(theme_name)
+            }
+        }
+    }
+
+    /// Apply color mode to custom theme (convert RGB to 256-color if needed)
+    /// This is used for custom themes that don't have optimized variants
+    pub fn with_color_mode_custom(mut self, mode: ColorMode) -> Self {
         match mode {
             ColorMode::Rgb => self,
             ColorMode::Indexed256 => {

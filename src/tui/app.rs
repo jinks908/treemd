@@ -115,11 +115,11 @@ impl App {
 
         let content_lines = document.content.lines().count();
 
-        // Load theme from config, apply custom colors, then apply color mode
+        // Load theme from config, apply color mode, then apply custom colors
         let current_theme = config.theme_name();
         let theme = Theme::from_name(current_theme)
-            .with_custom_colors(&config.theme)
-            .with_color_mode(color_mode);
+            .with_color_mode(color_mode, current_theme)
+            .with_custom_colors(&config.theme, color_mode);
 
         // Load outline width from config
         let outline_width = config.ui.outline_width;
@@ -440,7 +440,8 @@ impl App {
             // Element is below viewport - scroll down to show it
             else if end > viewport_end {
                 // Try to position element at top of viewport
-                self.content_scroll = start.min(self.content_height.saturating_sub(viewport_height));
+                self.content_scroll =
+                    start.min(self.content_height.saturating_sub(viewport_height));
             }
             // Element partially visible at bottom - ensure fully visible
             else if start >= scroll && end > viewport_end {
@@ -677,8 +678,8 @@ impl App {
         self.current_theme = new_theme;
         // Apply color mode when setting theme (also apply custom colors from config)
         self.theme = Theme::from_name(new_theme)
-            .with_custom_colors(&self.config.theme)
-            .with_color_mode(self.color_mode);
+            .with_color_mode(self.color_mode, new_theme)
+            .with_custom_colors(&self.config.theme, self.color_mode);
         self.show_theme_picker = false;
 
         // Save to config (silently ignore errors)
@@ -1140,7 +1141,7 @@ impl App {
         // Get current section content to index
         let content = if let Some(selected) = self.selected_heading_text() {
             self.document
-                .extract_section(&selected)
+                .extract_section(selected)
                 .unwrap_or_else(|| self.document.content.clone())
         } else {
             self.document.content.clone()
@@ -1234,10 +1235,9 @@ impl App {
             }
             ElementType::Table { rows, cols, .. } => {
                 // Enter table navigation mode
-                if let Err(e) = self.interactive_state.enter_table_mode() {
-                    return Err(e);
-                }
-                self.status_message = Some(self.interactive_state.table_status_text(rows + 1, *cols));
+                self.interactive_state.enter_table_mode()?;
+                self.status_message =
+                    Some(self.interactive_state.table_status_text(rows + 1, *cols));
                 Ok(())
             }
         }
@@ -1247,7 +1247,7 @@ impl App {
     fn reindex_interactive_elements(&mut self) {
         let content = if let Some(selected) = self.selected_heading_text() {
             self.document
-                .extract_section(&selected)
+                .extract_section(selected)
                 .unwrap_or_else(|| self.document.content.clone())
         } else {
             self.document.content.clone()
@@ -1268,7 +1268,9 @@ impl App {
         // Get the checkbox content text to use as identifier
         let checkbox_content = {
             let content = if let Some(selected) = self.selected_heading_text() {
-                self.document.extract_section(&selected).unwrap_or_else(|| self.document.content.clone())
+                self.document
+                    .extract_section(selected)
+                    .unwrap_or_else(|| self.document.content.clone())
             } else {
                 self.document.content.clone()
             };
@@ -1276,22 +1278,15 @@ impl App {
             use crate::parser::content::parse_content;
             let blocks = parse_content(&content, 0);
 
-            if let Some(block) = blocks.get(block_idx) {
-                if let crate::parser::output::Block::List { items, .. } = block {
-                    if let Some(item) = items.get(item_idx) {
-                        Some(item.content.clone())
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
+            if let Some(crate::parser::output::Block::List { items, .. }) = blocks.get(block_idx) {
+                items.get(item_idx).map(|item| item.content.clone())
             } else {
                 None
             }
         };
 
-        let checkbox_content = checkbox_content.ok_or_else(|| "Could not find checkbox content".to_string())?;
+        let checkbox_content =
+            checkbox_content.ok_or_else(|| "Could not find checkbox content".to_string())?;
 
         // Read the current file
         let file_content = std::fs::read_to_string(&self.current_file_path)
@@ -1340,7 +1335,9 @@ impl App {
             let trimmed = line.trim_start();
 
             // Check if this is a checkbox line
-            if (trimmed.starts_with("- [ ]") || trimmed.starts_with("- [x]") || trimmed.starts_with("- [X]"))
+            if (trimmed.starts_with("- [ ]")
+                || trimmed.starts_with("- [x]")
+                || trimmed.starts_with("- [X]"))
                 && !found
             {
                 // Extract the text after the checkbox marker
@@ -1435,10 +1432,14 @@ impl App {
     /// Get table data for current interactive element
     fn get_current_table_data(&self) -> Option<(Vec<String>, Vec<Vec<String>>)> {
         if let Some(element) = self.interactive_state.current_element() {
-            if let crate::tui::interactive::ElementType::Table { block_idx, .. } = &element.element_type {
+            if let crate::tui::interactive::ElementType::Table { block_idx, .. } =
+                &element.element_type
+            {
                 // Parse current section to get table data
                 let content = if let Some(selected) = self.selected_heading_text() {
-                    self.document.extract_section(&selected).unwrap_or_else(|| self.document.content.clone())
+                    self.document
+                        .extract_section(selected)
+                        .unwrap_or_else(|| self.document.content.clone())
                 } else {
                     self.document.content.clone()
                 };
@@ -1446,10 +1447,8 @@ impl App {
                 use crate::parser::content::parse_content;
                 let blocks = parse_content(&content, 0);
 
-                if let Some(block) = blocks.get(*block_idx) {
-                    if let crate::parser::output::Block::Table { headers, rows, .. } = block {
-                        return Some((headers.clone(), rows.clone()));
-                    }
+                if let Some(crate::parser::output::Block::Table { headers, rows, .. }) = blocks.get(*block_idx) {
+                    return Some((headers.clone(), rows.clone()));
                 }
             }
         }
@@ -1592,11 +1591,9 @@ impl App {
         if let Some(element) = self.interactive_state.current_element() {
             let block_idx = element.id.block_idx;
 
-            if let Some(block) = blocks.get(block_idx) {
-                if let crate::parser::output::Block::Table { .. } = block {
-                    // Find this table in the full file content
-                    return self.replace_table_cell_in_file(content, row, col, new_value);
-                }
+            if let Some(crate::parser::output::Block::Table { .. }) = blocks.get(block_idx) {
+                // Find this table in the full file content
+                return self.replace_table_cell_in_file(content, row, col, new_value);
             }
         }
 

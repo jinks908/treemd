@@ -336,7 +336,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         };
 
         format!(
-            " [{}] {}/{} ({}%){}{} • {} • f:Links • b:Back • w:View • []:Size • m:Mark • y/Y:Copy • t:Theme • ?:Help ",
+            " [{}] {}/{} ({}%){}{} • {} • i:Interactive • f:Links • b:Back • w:View • []:Size • m:Mark • y/Y:Copy • t:Theme • ?:Help ",
             focus_indicator,
             selected_idx + 1,
             total,
@@ -512,6 +512,43 @@ fn render_help_popup(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(vec![
             Span::styled("  F        ", Style::default().fg(theme.modal_key_fg())),
             Span::raw("Go forward in navigation history"),
+        ]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "Interactive Mode",
+            Style::default().add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(vec![
+            Span::styled("  i        ", Style::default().fg(theme.modal_key_fg())),
+            Span::raw("Enter interactive mode (navigate elements)"),
+        ]),
+        Line::from(vec![
+            Span::styled("  Tab/j/k  ", Style::default().fg(theme.modal_key_fg())),
+            Span::raw("Navigate between interactive elements"),
+        ]),
+        Line::from(vec![
+            Span::styled("  Enter    ", Style::default().fg(theme.modal_key_fg())),
+            Span::raw("Activate element (toggle/follow/edit)"),
+        ]),
+        Line::from(vec![
+            Span::styled("  Space    ", Style::default().fg(theme.modal_key_fg())),
+            Span::raw("Toggle checkboxes/details blocks"),
+        ]),
+        Line::from(vec![
+            Span::styled("  y        ", Style::default().fg(theme.modal_key_fg())),
+            Span::raw("Copy element (code/cell/link)"),
+        ]),
+        Line::from(vec![
+            Span::styled("  hjkl     ", Style::default().fg(theme.modal_key_fg())),
+            Span::raw("Navigate table cells (in table mode)"),
+        ]),
+        Line::from(vec![
+            Span::styled("  Enter    ", Style::default().fg(theme.modal_key_fg())),
+            Span::raw("Edit table cell (in table mode)"),
+        ]),
+        Line::from(vec![
+            Span::styled("  Esc      ", Style::default().fg(theme.modal_key_fg())),
+            Span::raw("Exit interactive mode"),
         ]),
         Line::from(""),
         Line::from(vec![Span::styled(
@@ -743,9 +780,9 @@ fn render_markdown_enhanced(
         match block {
             ContentBlock::Paragraph { content, inline } => {
                 let mut formatted = if !inline.is_empty() {
-                    render_inline_elements(&inline, theme)
+                    render_inline_elements(inline, theme)
                 } else {
-                    format_inline_markdown(&content, theme)
+                    format_inline_markdown(content, theme)
                 };
 
                 // Add selection indicator
@@ -786,7 +823,7 @@ fn render_markdown_enhanced(
                 lines.push(Line::from(fence_spans));
 
                 // Highlighted code
-                let highlighted = highlighter.highlight_code(&content, lang_str);
+                let highlighted = highlighter.highlight_code(content, lang_str);
                 lines.extend(highlighted);
 
                 // Closing fence
@@ -916,7 +953,7 @@ fn render_markdown_enhanced(
                 // If we have nested blocks, render them recursively
                 if !nested.is_empty() {
                     for nested_block in nested {
-                        let nested_lines = render_block_to_lines(&nested_block, highlighter, theme);
+                        let nested_lines = render_block_to_lines(nested_block, highlighter, theme);
                         for nested_line in nested_lines {
                             let mut spans = vec![Span::styled(
                                 "│ ",
@@ -960,7 +997,9 @@ fn render_markdown_enhanced(
             } => {
                 // Get selected cell position if in table navigation mode
                 let (in_table_mode, selected_cell) = if is_block_selected {
-                    let in_mode = interactive_state.map(|state| state.is_in_table_mode()).unwrap_or(false);
+                    let in_mode = interactive_state
+                        .map(|state| state.is_in_table_mode())
+                        .unwrap_or(false);
                     let cell = if in_mode {
                         interactive_state.and_then(|state| state.get_table_position())
                     } else {
@@ -971,7 +1010,15 @@ fn render_markdown_enhanced(
                     (false, None)
                 };
 
-                let table_lines = render_table(&headers, &alignments, &rows, theme, is_block_selected, in_table_mode, selected_cell);
+                let table_lines = render_table(
+                    headers,
+                    alignments,
+                    rows,
+                    theme,
+                    is_block_selected,
+                    in_table_mode,
+                    selected_cell,
+                );
                 lines.extend(table_lines);
             }
             ContentBlock::Image { alt, src, .. } => {
@@ -1046,7 +1093,7 @@ fn render_markdown_enhanced(
                 // Only render nested content if expanded
                 if is_expanded {
                     for nested_block in nested {
-                        let nested_lines = render_block_to_lines(&nested_block, highlighter, theme);
+                        let nested_lines = render_block_to_lines(nested_block, highlighter, theme);
                         for nested_line in nested_lines {
                             let mut spans = vec![Span::raw("  ")]; // Indent
                             spans.extend(nested_line.spans);
@@ -1218,7 +1265,9 @@ fn render_table(
         // Not in table nav mode: show arrow if table is selected as element
         top_border_spans.push(Span::styled(
             "→ ",
-            Style::default().fg(Color::Rgb(100, 200, 255)).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Rgb(100, 200, 255))
+                .add_modifier(Modifier::BOLD),
         ));
     }
 
@@ -1241,12 +1290,14 @@ fn render_table(
         headers,
         &col_widths,
         alignments,
-        theme,
-        true,
-        0, // This is row 0 (header)
-        in_table_mode,
-        is_selected,
-        selected_cell,
+        &TableRenderContext {
+            theme,
+            row_num: 0,
+            is_header: true,
+            in_table_mode,
+            is_table_selected: is_selected,
+            selected_cell,
+        },
     );
     lines.push(header_line);
 
@@ -1276,12 +1327,14 @@ fn render_table(
             row,
             &col_widths,
             alignments,
-            theme,
-            false,
-            data_row,
-            in_table_mode,
-            is_selected,
-            selected_cell,
+            &TableRenderContext {
+                theme,
+                row_num: data_row,
+                is_header: false,
+                in_table_mode,
+                is_table_selected: is_selected,
+                selected_cell,
+            },
         );
         lines.push(row_line);
     }
@@ -1308,32 +1361,38 @@ fn render_table(
     lines
 }
 
+struct TableRenderContext<'a> {
+    theme: &'a Theme,
+    row_num: usize,
+    is_header: bool,
+    in_table_mode: bool,
+    is_table_selected: bool,
+    selected_cell: Option<(usize, usize)>,
+}
+
 fn render_table_row(
     cells: &[String],
     col_widths: &[usize],
     alignments: &[Alignment],
-    theme: &Theme,
-    is_header: bool,
-    row_num: usize,
-    in_table_mode: bool,
-    is_table_selected: bool,
-    selected_cell: Option<(usize, usize)>,
+    ctx: &TableRenderContext,
 ) -> Line<'static> {
     let mut spans = Vec::new();
 
     // Add arrow or space to keep table aligned when selected or in table mode
-    if in_table_mode {
+    if ctx.in_table_mode {
         // In table mode: show arrow on selected row, spaces on others
-        let is_selected_row = selected_cell.map(|(r, _)| r) == Some(row_num);
+        let is_selected_row = ctx.selected_cell.map(|(r, _)| r) == Some(ctx.row_num);
         if is_selected_row {
             spans.push(Span::styled(
                 "→ ",
-                Style::default().fg(Color::Rgb(100, 200, 255)).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Rgb(100, 200, 255))
+                    .add_modifier(Modifier::BOLD),
             ));
         } else {
             spans.push(Span::raw("  ")); // Two spaces to match arrow width
         }
-    } else if is_table_selected {
+    } else if ctx.is_table_selected {
         // Table selected but not in nav mode: add spacing to align with top arrow
         spans.push(Span::raw("  "));
     }
@@ -1350,7 +1409,7 @@ fn render_table_row(
         let cell_text = align_text(cell, width, alignment);
 
         // Determine if this specific cell is selected
-        let is_selected = selected_cell.map(|(r, c)| (r, c)) == Some((row_num, i));
+        let is_selected = ctx.selected_cell == Some((ctx.row_num, i));
 
         let style = if is_selected {
             // Highlighted selected cell
@@ -1358,12 +1417,12 @@ fn render_table_row(
                 .fg(Color::Black)
                 .bg(Color::Rgb(100, 200, 255))
                 .add_modifier(Modifier::BOLD)
-        } else if is_header {
+        } else if ctx.is_header {
             Style::default()
-                .fg(theme.heading_color(3))
+                .fg(ctx.theme.heading_color(3))
                 .add_modifier(Modifier::BOLD)
         } else {
-            theme.text_style()
+            ctx.theme.text_style()
         };
 
         spans.push(Span::styled(cell_text, style));
@@ -1381,13 +1440,13 @@ fn detect_checkbox_in_text(text: &str) -> (bool, bool, &str) {
     let trimmed = text.trim_start();
 
     // Check for [x] or [X] (checked)
-    if trimmed.starts_with("[x]") || trimmed.starts_with("[X]") {
-        return (true, true, trimmed[3..].trim_start());
+    if let Some(stripped) = trimmed.strip_prefix("[x]").or_else(|| trimmed.strip_prefix("[X]")) {
+        return (true, true, stripped.trim_start());
     }
 
     // Check for [ ] (unchecked)
-    if trimmed.starts_with("[ ]") {
-        return (true, false, trimmed[3..].trim_start());
+    if let Some(stripped) = trimmed.strip_prefix("[ ]") {
+        return (true, false, stripped.trim_start());
     }
 
     // Not a task list item
@@ -1651,7 +1710,10 @@ fn render_cell_edit_overlay(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Clear, edit_area);
 
     // Create edit display
-    let edit_text = format!("Edit Cell [{},{}]: {}_", app.cell_edit_row, app.cell_edit_col, app.cell_edit_value);
+    let edit_text = format!(
+        "Edit Cell [{},{}]: {}_",
+        app.cell_edit_row, app.cell_edit_col, app.cell_edit_value
+    );
 
     let paragraph = Paragraph::new(vec![
         Line::from(vec![Span::styled(
