@@ -1401,10 +1401,10 @@ impl App {
                 // Open external URL in browser
                 #[cfg(target_os = "macos")]
                 let open_cmd = "open";
-                #[cfg(target_os = "linux")]
-                let open_cmd = "xdg-open";
                 #[cfg(target_os = "windows")]
                 let open_cmd = "start";
+                #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+                let open_cmd = "xdg-open";
 
                 std::process::Command::new(open_cmd)
                     .arg(url)
