@@ -63,23 +63,61 @@ fn main() -> Result<()> {
         }
     }
 
-    // Ensure file is provided (unless we already handled setup)
-    let file = args.file.clone().unwrap_or_else(|| {
-        eprintln!("Error: markdown file argument is required");
-        eprintln!("\nUsage: treemd <FILE>\n");
-        eprintln!("For shell completion setup, use:");
-        eprintln!("  treemd --setup-completions");
-        std::process::exit(1);
-    });
+    // Handle --query-help (doesn't require input)
+    if args.query_help {
+        print_query_help();
+        return Ok(());
+    }
 
-    // Parse the markdown file
-    let doc = match parser::parse_file(&file) {
-        Ok(doc) => doc,
+    // For TUI mode with piped stdin, we'll read stdin first, then open TUI
+    // This allows elegant piping: tree | treemd
+    //
+    // How it works:
+    // 1. Read all of stdin into memory (tree output, markdown, etc.)
+    // 2. Process and parse the content
+    // 3. ratatui/crossterm opens /dev/tty for keyboard input (not stdin)
+    // 4. TUI displays the processed content with full interactivity
+    //
+    // This is the standard pattern used by: less, fzf, bat, etc.
+
+    // Determine input source (file, stdin, or error)
+    let input_source = match treemd::input::determine_input_source(args.file.as_deref()) {
+        Ok(source) => source,
+        Err(treemd::input::InputError::NoTty) => {
+            eprintln!("Error: markdown file argument is required");
+            eprintln!("\nUsage: treemd [OPTIONS] <FILE>");
+            eprintln!("       treemd [OPTIONS] -");
+            eprintln!("       tree | treemd [OPTIONS]\n");
+            eprintln!("Use '-' to explicitly read from stdin, or pipe input with CLI flags.");
+            eprintln!("\nFor shell completion setup, use:");
+            eprintln!("  treemd --setup-completions");
+            std::process::exit(1);
+        }
         Err(e) => {
-            eprintln!("Error reading file: {}", e);
+            eprintln!("Error reading input: {}", e);
             process::exit(1);
         }
     };
+
+    // Check if stdin was piped (before consuming input_source)
+    let stdin_was_piped = matches!(input_source, treemd::input::InputSource::Stdin(_));
+
+    // Process input (handles tree format conversion, markdown passthrough, etc.)
+    let markdown_content = match treemd::input::process_input(input_source) {
+        Ok(content) => content,
+        Err(e) => {
+            eprintln!("Error processing input: {}", e);
+            process::exit(1);
+        }
+    };
+
+    // Parse the markdown content
+    let doc = parser::parse_markdown(&markdown_content);
+
+    // Handle query mode
+    if let Some(ref query_str) = args.query {
+        return handle_query_mode(&doc, query_str, args.query_output.as_deref());
+    }
 
     // If no flags, launch TUI
     if !args.list
@@ -112,27 +150,66 @@ fn main() -> Result<()> {
         };
 
         // Show compatibility warning if needed (before TUI init)
+        // Skip the warning prompt if stdin was piped (already consumed)
         if caps.should_warn && !config.terminal.warned_terminal_app {
             if let Some(warning) = caps.warning_message() {
                 eprintln!("\n{}\n", warning);
-                // Wait for user to press a key
-                use std::io::{Read, stdin};
-                let _ = stdin().read(&mut [0u8]).unwrap();
+                // Only wait for keypress if stdin is still available (not piped)
+                if !stdin_was_piped {
+                    use std::io::{Read, stdin};
+                    let _ = stdin().read(&mut [0u8]).unwrap();
+                } else {
+                    eprintln!("Press any key in the TUI to continue...");
+                }
             }
             // Mark that we've warned the user
             let _ = config.set_warned_terminal_app();
         }
 
-        let mut terminal = ratatui::init();
-        let filename = file
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("unknown")
-            .to_string();
-        let file_path = file.canonicalize().unwrap_or_else(|_| file.clone());
+        // Initialize terminal with explicit error handling
+        // When stdin is piped, we use /dev/tty for input (handled by tui::tty module)
+        use crossterm::terminal::EnterAlternateScreen;
+        use crossterm::ExecutableCommand;
+        use std::io::stdout;
+
+        // Manually initialize to get better error messages
+        // Use our custom enable_raw_mode that handles piped stdin
+        treemd::tui::tty::enable_raw_mode().inspect_err(|e| {
+            eprintln!("Failed to enable raw mode: {}", e);
+            eprintln!("Note: When piping input, ensure you have a controlling terminal.");
+        })?;
+
+        stdout().execute(EnterAlternateScreen).inspect_err(|_| {
+            treemd::tui::tty::disable_raw_mode().ok();
+        })?;
+
+        let backend = ratatui::backend::CrosstermBackend::new(stdout());
+        let mut terminal = ratatui::Terminal::new(backend).inspect_err(|_| {
+            treemd::tui::tty::disable_raw_mode().ok();
+        })?;
+
+        // Get filename and path (use placeholders for stdin)
+        let (filename, file_path) = if let Some(ref file) = args.file {
+            let name = file
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("stdin")
+                .to_string();
+            let path = file.canonicalize().unwrap_or_else(|_| file.clone());
+            (name, path)
+        } else {
+            // Stdin input
+            ("stdin".to_string(), std::path::PathBuf::from("<stdin>"))
+        };
+
         let app = treemd::App::new(doc, filename, file_path, config, color_mode);
         let result = treemd::tui::run(&mut terminal, app);
-        ratatui::restore();
+
+        // Cleanup terminal state
+        use crossterm::terminal::LeaveAlternateScreen;
+        stdout().execute(LeaveAlternateScreen).ok();
+        treemd::tui::tty::disable_raw_mode().ok();
+
         return result;
     }
 
@@ -252,4 +329,170 @@ fn extract_section(doc: &Document, section_name: &str) {
 
         println!("{}", &after[..end_pos].trim());
     }
+}
+
+fn handle_query_mode(
+    doc: &Document,
+    query_str: &str,
+    output_format: Option<&str>,
+) -> Result<()> {
+    use treemd::query::{self, OutputFormat};
+
+    // Parse output format
+    let format = output_format
+        .map(|s| s.parse::<OutputFormat>())
+        .transpose()
+        .map_err(|e| {
+            eprintln!("Error: {}", e);
+            process::exit(1);
+        })?
+        .unwrap_or(OutputFormat::Plain);
+
+    // Execute query
+    match query::execute(doc, query_str) {
+        Ok(results) => {
+            if results.is_empty() {
+                // No results - exit silently like jq
+                return Ok(());
+            }
+            let output = query::format_output(&results, format);
+            println!("{}", output);
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("{}", e);
+            process::exit(1);
+        }
+    }
+}
+
+fn print_query_help() {
+    let help = r#"
+treemd Query Language (tql)
+
+A jq-like query language for navigating and extracting markdown structure.
+
+ELEMENT SELECTORS
+    .h, .heading    All headings (any level)
+    .h1 - .h6       Headings by level
+    .code           All code blocks
+    .code[rust]     Code blocks by language
+    .link, .a       All links
+    .link[external] External links only
+    .img            All images
+    .table          All tables
+    .list           All lists
+    .blockquote     All blockquotes
+
+FILTERS & INDEXING
+    .h2[Features]       Heading containing "Features" (fuzzy)
+    .h2["Installation"] Heading with exact text
+    .h2[0]              First h2
+    .h2[-1]             Last h2
+    .h2[1:3]            h2s at index 1 and 2
+    .h2[:3]             First 3 h2s
+
+HIERARCHY
+    .h1 > .h2           Direct child h2s under h1s
+    .h1 >> .code        Code blocks anywhere under h1s
+
+PIPES
+    .h2 | text          Get heading text (strips ##)
+    [.h2] | count       Count all h2s
+    .code | lang        Get code block languages
+    .link | url         Get link URLs
+
+COLLECTION FUNCTIONS
+    count, length       Count elements (alias: len, size)
+    first, last         First/last element (alias: head)
+    limit(n), take(n)   First n elements
+    skip(n), drop(n)    Skip first n elements
+    nth(n)              Get element at index
+    reverse             Reverse order
+    sort                Sort alphabetically
+    sort_by(key)        Sort by property
+    unique              Remove duplicates
+    flatten             Flatten nested arrays
+    group_by(key)       Group elements by key
+    min, max            Min/max numeric value
+    add                 Sum numbers or concat strings
+
+STRING FUNCTIONS
+    text                Get text representation
+    upper, lower        Case conversion
+    trim                Strip whitespace
+    split(sep)          Split by separator
+    join(sep)           Join with separator
+    replace(a, b)       Replace substring
+    slugify             URL-friendly slug
+    lines, words, chars Count lines/words/chars
+
+FILTER FUNCTIONS
+    select(cond)        Keep if condition true (alias: where, filter)
+    contains(s)         Contains substring (alias: includes)
+    startswith(s)       Starts with prefix
+    endswith(s)         Ends with suffix
+    matches(regex)      Matches regex pattern
+    any, all            Check if any/all truthy
+    not                 Negate boolean
+
+CONTENT FUNCTIONS
+    content             Section content (for headings)
+    md                  Raw markdown
+    url, href, src      Get URL/link/image source
+    lang                Code block language
+
+AGGREGATION FUNCTIONS
+    stats               Document statistics
+    levels              Heading count by level
+    langs               Code block count by language
+    types               Link types count
+
+EXAMPLES
+    # List all h2 headings
+    treemd -q '.h2' doc.md
+
+    # Get heading text only
+    treemd -q '.h2 | text' doc.md
+
+    # Count headings
+    treemd -q '[.h2] | count' doc.md
+
+    # First 5 headings
+    treemd -q '[.h] | limit(5)' doc.md
+
+    # Filter headings (three equivalent ways)
+    treemd -q '.h | select(contains("API"))' doc.md
+    treemd -q '.h | where(contains("API"))' doc.md
+    treemd -q '.h[API]' doc.md
+
+    # All Rust code blocks
+    treemd -q '.code[rust]' doc.md
+
+    # External link URLs
+    treemd -q '.link[external] | url' doc.md
+
+    # h2s under "Features" section
+    treemd -q '.h1[Features] > .h2' doc.md
+
+    # Group headings by level
+    treemd -q '[.h] | group_by("level")' doc.md
+
+    # Document statistics
+    treemd -q '. | stats' doc.md
+
+    # JSON output
+    treemd -q '.h2' --query-output json doc.md
+
+OUTPUT FORMATS (--query-output)
+    plain       Human-readable text (default)
+    json        Compact JSON
+    json-pretty Pretty-printed JSON (alias: jsonp)
+    jsonl       Line-delimited JSON (one per line)
+    md          Raw markdown
+    tree        Tree structure
+
+For more details, see: https://github.com/epistates/treemd
+"#;
+    println!("{}", help.trim());
 }

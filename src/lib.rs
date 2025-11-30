@@ -52,6 +52,11 @@
 /// Provides configuration management for theme choices, UI settings, and terminal preferences.
 pub mod config;
 
+/// Input handling module for stdin and file sources.
+///
+/// Provides robust input reading, format detection, and tree output parsing.
+pub mod input;
+
 /// Parser module for markdown documents.
 ///
 /// Provides functions to parse markdown files and content into structured documents.
@@ -62,6 +67,21 @@ pub mod parser;
 /// Provides the App and UI rendering functionality for building interactive
 /// markdown viewers.
 pub mod tui;
+
+/// Query language module for jq-like markdown querying.
+///
+/// Provides a powerful query language for navigating and extracting
+/// markdown structure, similar to jq for JSON.
+///
+/// ## Example
+///
+/// ```ignore
+/// use treemd::query;
+///
+/// let doc = treemd::parse_markdown("# Hello\n## World");
+/// let results = query::execute(&doc, ".h2 | text")?;
+/// ```
+pub mod query;
 
 // Re-export commonly used types for convenience
 pub use config::Config;
