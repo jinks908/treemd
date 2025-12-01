@@ -136,8 +136,10 @@ fn main() -> Result<()> {
         }
 
         // Detect terminal capabilities and determine color mode
+        // Priority: CLI args > config file > auto-detection
         let caps = treemd::tui::TerminalCapabilities::detect();
         let color_mode = if let Some(ref mode_arg) = args.color_mode {
+            // CLI flag takes highest priority
             use cli::ColorModeArg;
             use treemd::tui::ColorMode;
             match mode_arg {
@@ -146,7 +148,14 @@ fn main() -> Result<()> {
                 ColorModeArg::Color256 => ColorMode::Indexed256,
             }
         } else {
-            caps.recommended_color_mode
+            // Check config file setting before falling back to auto-detection
+            use treemd::tui::ColorMode;
+            match config.terminal.color_mode.as_str() {
+                "rgb" => ColorMode::Rgb,
+                "256" => ColorMode::Indexed256,
+                // "auto" or any other value falls back to detection
+                _ => caps.recommended_color_mode,
+            }
         };
 
         // Show compatibility warning if needed (before TUI init)
