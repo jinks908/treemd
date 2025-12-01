@@ -96,7 +96,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                                 app.interactive_state.exit_table_mode();
                                 app.status_message = Some(app.interactive_state.status_text());
                             }
-                            KeyCode::Char('h') | KeyCode::Left => {
+                            KeyCode::Char('j') | KeyCode::Left => {
                                 // Extract table dimensions first
                                 let (rows, cols) = if let Some(element) =
                                     app.interactive_state.current_element()
@@ -123,7 +123,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                                     );
                                 }
                             }
-                            KeyCode::Char('j') | KeyCode::Down => {
+                            KeyCode::Char('l') | KeyCode::Down => {
                                 // Extract table dimensions first
                                 let (rows, cols) = if let Some(element) =
                                     app.interactive_state.current_element()
@@ -177,7 +177,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                                     );
                                 }
                             }
-                            KeyCode::Char('l') | KeyCode::Right => {
+                            KeyCode::Char(';') | KeyCode::Right => {
                                 // Extract table dimensions first
                                 let (rows, cols) = if let Some(element) =
                                     app.interactive_state.current_element()
@@ -251,7 +251,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                                 // Update status bar
                                 app.status_message = Some(app.interactive_state.status_text());
                             }
-                            KeyCode::Char('j') | KeyCode::Down => {
+                            KeyCode::Char('l') | KeyCode::Down => {
                                 app.interactive_state.next();
                                 // Auto-scroll to keep element in view
                                 app.scroll_to_interactive_element(20);
@@ -331,7 +331,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                                 app.next_link();
                             }
                         }
-                        KeyCode::Char('j') | KeyCode::Down => app.next_link(),
+                        KeyCode::Char('l') | KeyCode::Down => app.next_link(),
                         KeyCode::Char('k') | KeyCode::Up => app.previous_link(),
                         KeyCode::Char(c @ '1'..='9') => {
                             // Direct link selection by number
@@ -374,7 +374,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                         KeyCode::Char('?') => app.toggle_help(),
                         KeyCode::Char('/') => app.toggle_search(),
                         KeyCode::Esc if app.show_help => app.toggle_help(),
-                        KeyCode::Char('j') | KeyCode::Down => app.next(),
+                        KeyCode::Char('l') | KeyCode::Down => app.next(),
                         KeyCode::Char('k') | KeyCode::Up => app.previous(),
                         KeyCode::Char('d') => app.scroll_page_down(),
                         KeyCode::Char('u') => app.scroll_page_up(),
@@ -383,8 +383,8 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                         KeyCode::Char('p') => app.jump_to_parent(),
                         KeyCode::Enter | KeyCode::Char(' ') => app.toggle_expand(),
                         KeyCode::Tab => app.toggle_focus(),
-                        KeyCode::Char('h') | KeyCode::Left => app.collapse(),
-                        KeyCode::Char('l') | KeyCode::Right => app.expand(),
+                        KeyCode::Char('j') | KeyCode::Left => app.collapse(),
+                        KeyCode::Char(';') | KeyCode::Right => app.expand(),
                         // New UX features
                         KeyCode::Char('w') => app.toggle_outline(),
                         KeyCode::Char('[') => app.cycle_outline_width(false),
