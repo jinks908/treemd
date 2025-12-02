@@ -163,11 +163,18 @@ struct ParserState {
     table_alignments: Vec<Alignment>,
     table_rows: Vec<Vec<String>>,
     current_row: Vec<String>,
+    /// Current heading level (when inside a heading)
+    heading_level: Option<usize>,
+    /// Buffer for heading content
+    heading_buffer: String,
+    /// Inline elements for heading
+    heading_inline: Vec<InlineElement>,
     in_paragraph: bool,
     in_list: bool,
     in_code: bool,
     in_blockquote: bool,
     in_table: bool,
+    in_heading: bool,
     in_strong: bool,
     in_emphasis: bool,
     in_strikethrough: bool,
@@ -201,11 +208,15 @@ impl ParserState {
             table_alignments: Vec::new(),
             table_rows: Vec::new(),
             current_row: Vec::new(),
+            heading_level: None,
+            heading_buffer: String::new(),
+            heading_inline: Vec::new(),
             in_paragraph: false,
             in_list: false,
             in_code: false,
             in_blockquote: false,
             in_table: false,
+            in_heading: false,
             in_strong: false,
             in_emphasis: false,
             in_strikethrough: false,
@@ -618,6 +629,27 @@ fn process_event(event: Event, state: &mut ParserState, blocks: &mut Vec<Block>)
                 state.code_buffer.push_str(&text);
             } else if state.in_blockquote {
                 state.blockquote_buffer.push_str(&text);
+            } else if state.in_heading {
+                // Accumulate heading text and inline elements
+                state.heading_buffer.push_str(&text);
+                let element = if state.in_code_inline {
+                    InlineElement::Code {
+                        value: text.to_string(),
+                    }
+                } else if state.in_strong {
+                    InlineElement::Strong {
+                        value: text.to_string(),
+                    }
+                } else if state.in_emphasis {
+                    InlineElement::Emphasis {
+                        value: text.to_string(),
+                    }
+                } else {
+                    InlineElement::Text {
+                        value: text.to_string(),
+                    }
+                };
+                state.heading_inline.push(element);
             } else if state.in_link || state.in_image {
                 state.link_text.push_str(&text);
             } else {
@@ -663,15 +695,31 @@ fn process_event(event: Event, state: &mut ParserState, blocks: &mut Vec<Block>)
             state.flush_paragraph(blocks);
             blocks.push(Block::HorizontalRule);
         }
-        Event::Start(Tag::Heading { .. }) => {
-            // Clear buffers when entering a heading - we don't include headings in parsed blocks
-            state.paragraph_buffer.clear();
-            state.inline_buffer.clear();
+        Event::Start(Tag::Heading { level, .. }) => {
+            // Flush any pending content before the heading
+            state.flush_paragraph(blocks);
+            // Start tracking heading content
+            state.in_heading = true;
+            state.heading_level = Some(level as usize);
+            state.heading_buffer.clear();
+            state.heading_inline.clear();
         }
         Event::End(TagEnd::Heading(_)) => {
-            // Clear buffers after heading to prevent text leaking into next paragraph
-            state.paragraph_buffer.clear();
-            state.inline_buffer.clear();
+            // Create a heading block from accumulated content
+            if state.in_heading && !state.heading_buffer.is_empty() {
+                if let Some(level) = state.heading_level {
+                    blocks.push(Block::Heading {
+                        level,
+                        content: state.heading_buffer.clone(),
+                        inline: state.heading_inline.clone(),
+                    });
+                }
+            }
+            // Clear heading state
+            state.in_heading = false;
+            state.heading_level = None;
+            state.heading_buffer.clear();
+            state.heading_inline.clear();
         }
         _ => {}
     }

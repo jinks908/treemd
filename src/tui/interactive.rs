@@ -623,6 +623,7 @@ fn count_block_lines(blocks: &[Block]) -> usize {
 /// Count lines for a single block
 fn count_single_block_lines(block: &Block) -> usize {
     match block {
+        Block::Heading { .. } => 1,
         Block::Paragraph { .. } => 1,
         Block::Code { content, .. } => 2 + content.lines().count(),
         Block::List { items, .. } => items.len(),

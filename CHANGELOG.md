@@ -5,6 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] - 2025-12-02
+
+### Fixed
+
+- **Sub-headings not displayed in content pane** - Fixed regression where sub-headings within a section were not rendered in the content pane ([#10](https://github.com/Epistates/treemd/issues/10))
+  - Added `Block::Heading` variant to the parser's block types
+  - Sub-headings now render with proper styling (colored, bold, underlined) matching the screenshot in README
+  - Content structure and hierarchy are preserved when viewing sections
+
+- **Link selection visibility in interactive mode** - Selected links now have clear visual highlighting with background color
+  - Previously only a block-level arrow indicated selection, making it unclear which specific link was selected
+  - Now selected links get a cyan background highlight (matching table cell selection style)
+  - Arrow indicator also appears on the containing paragraph to help locate the selection
+  - Also applies to images in interactive mode
+
+- **Numbered lists with nested code blocks** - Fixed markdown display issue where numbered list items containing code blocks would render incorrectly ([#8](https://github.com/Epistates/treemd/issues/8))
+  - List items now properly contain their nested code blocks, blockquotes, and other block elements
+  - Parser correctly associates indented blocks with their parent list items
+  - Renderer handles nested block rendering within list item context
+
+### Changed
+
+- **Link navigator layout stability** - Link targets now display inline to prevent layout shift when cycling through links ([PR #9](https://github.com/Epistates/treemd/pull/9))
+  - Previously, selected links showed target on a separate line causing list to jump
+  - Now all links show target inline (e.g., `[1] Link Text → target`) for stable navigation
+
+### Refactored
+
+- **TUI UI module architecture** - Refactored monolithic `ui.rs` (~1700 lines) into modular components for better maintainability
+  - `ui/mod.rs` (~940 lines) - Core rendering orchestration
+  - `ui/util.rs` (~265 lines) - Utility functions: `centered_area`, `detect_checkbox_in_text`, `align_text`
+  - `ui/popups.rs` (~460 lines) - Popup rendering: help, link picker, search, theme selector, cell edit
+  - `ui/table.rs` (~460 lines) - Table rendering: `render_table`, `render_table_row`, `TableRenderContext`
+  - Added comprehensive unit tests for extracted modules (29 new tests)
+  - Zero regressions - all 90 tests pass
+
+### Technical
+
+- **Parser improvements** (`src/parser/content.rs`, `src/parser/output.rs`)
+  - Added `Block::Heading` variant with level, content, and inline elements for sub-heading support
+  - Added `Block::ListItemStart` variant to track list item context during parsing
+  - `parse_content()` now parses headings within content and creates `Block::Heading` blocks
+  - Nested blocks are properly associated with their parent list items instead of being siblings
+
+- **UI module organization** (`src/tui/ui/`)
+  - Clean separation of concerns: utilities, popups, tables, and core rendering
+  - Each module has focused responsibility and comprehensive test coverage
+  - Added `ContentBlock::Heading` rendering with level-appropriate colors and styling
+  - `render_inline_elements()` now accepts optional selection index for inline element highlighting
+  - Links and images in interactive mode get background highlight when selected
+  - Improved code discoverability and maintainability
+
 ## [0.4.1] - 2025-12-01
 
 ### Fixed

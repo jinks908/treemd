@@ -1,14 +1,19 @@
+mod popups;
+mod table;
+mod util;
+
 use crate::tui::app::{App, Focus};
-use crate::tui::help_text;
 use crate::tui::theme::Theme;
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Flex, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{
-    Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
-    ScrollbarState, Wrap,
+    Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, Wrap,
 };
+use popups::{render_cell_edit_overlay, render_help_popup, render_link_picker, render_search_overlay, render_theme_picker};
+use table::render_table;
+use util::detect_checkbox_in_text;
 
 pub fn render(frame: &mut Frame, app: &mut App) {
     // Update content metrics before rendering to ensure content height and scroll are correct
@@ -365,181 +370,9 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(status, area);
 }
 
-fn render_help_popup(frame: &mut Frame, app: &App, area: Rect) {
-    let popup_area = centered_area(area, 70, 80);
-    let theme = &app.theme;
-
-    // Clear the area
-    frame.render_widget(Clear, popup_area);
-
-    // Build help text with theme colors
-    let help_text = help_text::build_help_text(theme);
-
-    let help_text_len = help_text.len();
-
-    let paragraph = Paragraph::new(help_text)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.modal_border()))
-                .title(" Help ")
-                .style(Style::default().bg(theme.modal_bg())),
-        )
-        .wrap(Wrap { trim: false })
-        .scroll((app.help_scroll, 0));
-
-    frame.render_widget(paragraph, popup_area);
-
-    // Render scrollbar for help
-    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-        .begin_symbol(Some("↑"))
-        .end_symbol(Some("↓"))
-        .style(Style::default().fg(theme.modal_border()));
-
-    let mut scrollbar_state = ScrollbarState::new(help_text_len).position(app.help_scroll as usize);
-
-    frame.render_stateful_widget(
-        scrollbar,
-        popup_area.inner(ratatui::layout::Margin {
-            vertical: 1,
-            horizontal: 0,
-        }),
-        &mut scrollbar_state,
-    );
-}
-
-fn centered_area(area: Rect, percent_x: u16, percent_y: u16) -> Rect {
-    let vertical = Layout::vertical([Constraint::Percentage(percent_y)]).flex(Flex::Center);
-    let horizontal = Layout::horizontal([Constraint::Percentage(percent_x)]).flex(Flex::Center);
-    let [area] = vertical.areas(area);
-    let [area] = horizontal.areas(area);
-    area
-}
-
-fn render_link_picker(frame: &mut Frame, app: &App, area: Rect) {
-    use crate::parser::LinkTarget;
-
-    let theme = &app.theme;
-
-    // Create centered popup area (smaller than full screen)
-    let popup_area = centered_area(area, 80, 60);
-
-    // Clear background
-    frame.render_widget(Clear, popup_area);
-
-    // Create lines for each link
-    let mut lines = vec![
-        Line::from(vec![Span::styled(
-            format!(
-                "Links in this section ({} found) - Tab/j/k to navigate, Enter to follow, Esc to cancel",
-                app.links_in_view.len()
-            ),
-            Style::default()
-                .fg(theme.modal_title())
-                .add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(""),
-    ];
-
-    for (idx, link) in app.links_in_view.iter().enumerate() {
-        let is_selected = app.selected_link_idx == Some(idx);
-
-        // Format link number and text
-        let number = format!("[{}] ", idx + 1);
-        let link_text = &link.text;
-
-        // Format target
-        let target_str = match &link.target {
-            LinkTarget::Anchor(a) => format!("#{}", a),
-            LinkTarget::RelativeFile { path, anchor } => {
-                if let Some(a) = anchor {
-                    format!("{}#{}", path.display(), a)
-                } else {
-                    path.display().to_string()
-                }
-            }
-            LinkTarget::WikiLink { target, .. } => format!("[[{}]]", target),
-            LinkTarget::External(url) => {
-                if url.len() > 50 {
-                    format!("{}...", &url[..47])
-                } else {
-                    url.clone()
-                }
-            }
-        };
-
-        // Different styles for selected vs unselected
-        if is_selected {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "▶ ",
-                    Style::default()
-                        .fg(theme.modal_selected_marker())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    number,
-                    Style::default()
-                        .fg(theme.modal_key_fg())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    link_text,
-                    Style::default()
-                        .fg(theme.modal_selected_fg())
-                        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-                ),
-                Span::styled(
-                    format!(" → {}", target_str),
-                    Style::default()
-                        .fg(theme.modal_description())
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]));
-        } else {
-            lines.push(Line::from(vec![
-                Span::styled("  ", Style::default()),
-                Span::styled(number, Style::default().fg(theme.modal_description())),
-                Span::styled(link_text, Style::default().fg(theme.modal_text())),
-                Span::styled(
-                    format!(" → {}", target_str),
-                    Style::default().fg(theme.modal_description()),
-                ),
-            ]));
-        }
-
-        // Add blank line between links
-        if idx < app.links_in_view.len() - 1 {
-            lines.push(Line::from(""));
-        }
-    }
-
-    // Add footer
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![Span::styled(
-        "Tab/j/k: Navigate • 1-9: Jump • p: Parent • Enter: Follow • Esc: Cancel",
-        Style::default()
-            .fg(theme.modal_description())
-            .add_modifier(Modifier::ITALIC),
-    )]));
-
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.modal_border()))
-                .title(" Link Navigator ")
-                .style(Style::default().bg(theme.modal_bg())),
-        )
-        .wrap(Wrap { trim: false });
-
-    frame.render_widget(paragraph, popup_area);
-}
-
 use crate::parser::content::parse_content;
-use crate::parser::output::{Alignment, Block as ContentBlock, InlineElement};
+use crate::parser::output::{Block as ContentBlock, InlineElement};
 use crate::tui::syntax::SyntaxHighlighter;
-use unicode_width::UnicodeWidthStr;
 
 fn render_markdown_enhanced(
     content: &str,
@@ -554,14 +387,56 @@ fn render_markdown_enhanced(
     let blocks = parse_content(content, 0);
 
     for (block_idx, block) in blocks.iter().enumerate() {
+        // Check if any element in this block is selected (block-level or inline)
         let is_block_selected = selected_element_id
-            .map(|id| id.block_idx == block_idx && id.sub_idx.is_none())
+            .map(|id| id.block_idx == block_idx)
             .unwrap_or(false);
 
+        // Get the selected inline element index within this block (if any)
+        let selected_inline_idx = selected_element_id
+            .filter(|id| id.block_idx == block_idx)
+            .and_then(|id| id.sub_idx);
+
         match block {
+            ContentBlock::Heading {
+                level,
+                content,
+                inline,
+            } => {
+                // Render sub-heading with appropriate styling
+                let mut formatted = if !inline.is_empty() {
+                    render_inline_elements(inline, theme, selected_inline_idx)
+                } else {
+                    format_inline_markdown(content, theme)
+                };
+
+                // Apply heading style to all spans
+                let heading_style = Style::default()
+                    .fg(theme.heading_color(*level))
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
+
+                for span in &mut formatted {
+                    span.style = heading_style;
+                }
+
+                // Add selection indicator if selected
+                if is_block_selected {
+                    formatted.insert(
+                        0,
+                        Span::styled(
+                            "→ ",
+                            Style::default()
+                                .fg(Color::Rgb(100, 200, 255))
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    );
+                }
+
+                lines.push(Line::from(formatted));
+            }
             ContentBlock::Paragraph { content, inline } => {
                 let mut formatted = if !inline.is_empty() {
-                    render_inline_elements(inline, theme)
+                    render_inline_elements(inline, theme, selected_inline_idx)
                 } else {
                     format_inline_markdown(content, theme)
                 };
@@ -693,9 +568,9 @@ fn render_markdown_enhanced(
                             }
                         }
                     } else {
-                        // Simple single-line item
+                        // Simple single-line item (or item with nested blocks)
                         let formatted = if !item.inline.is_empty() {
-                            render_inline_elements(&item.inline, theme)
+                            render_inline_elements(&item.inline, theme, None)
                         } else {
                             format_inline_markdown(&item.content, theme)
                         };
@@ -724,6 +599,18 @@ fn render_markdown_enhanced(
                         spans.push(Span::styled(prefix, Style::default().fg(theme.list_bullet)));
                         spans.extend(formatted);
                         lines.push(Line::from(spans));
+                    }
+
+                    // Render nested blocks within this list item (e.g., code blocks)
+                    for nested_block in &item.blocks {
+                        let nested_lines =
+                            render_block_to_lines(nested_block, highlighter, theme);
+                        for nested_line in nested_lines {
+                            // Add indentation for nested content (align with list item text)
+                            let mut indented_spans = vec![Span::raw("     ")]; // 5 spaces indent
+                            indented_spans.extend(nested_line.spans);
+                            lines.push(Line::from(indented_spans));
+                        }
                     }
                 }
             }
@@ -902,9 +789,32 @@ fn render_block_to_lines(
     let mut lines = Vec::new();
 
     match block {
+        ContentBlock::Heading {
+            level,
+            content,
+            inline,
+        } => {
+            // Render heading with appropriate styling
+            let mut formatted = if !inline.is_empty() {
+                render_inline_elements(inline, theme, None)
+            } else {
+                format_inline_markdown(content, theme)
+            };
+
+            // Apply heading style to all spans
+            let heading_style = Style::default()
+                .fg(theme.heading_color(*level))
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
+
+            for span in &mut formatted {
+                span.style = heading_style;
+            }
+
+            lines.push(Line::from(formatted));
+        }
         ContentBlock::Paragraph { content, inline } => {
             let formatted = if !inline.is_empty() {
-                render_inline_elements(inline, theme)
+                render_inline_elements(inline, theme, None)
             } else {
                 format_inline_markdown(content, theme)
             };
@@ -914,8 +824,22 @@ fn render_block_to_lines(
             language, content, ..
         } => {
             let lang_str = language.as_deref().unwrap_or("");
+
+            // Opening fence
+            lines.push(Line::from(vec![Span::styled(
+                format!("```{}", lang_str),
+                theme.code_fence_style(),
+            )]));
+
+            // Highlighted code
             let highlighted = highlighter.highlight_code(content, lang_str);
             lines.extend(highlighted);
+
+            // Closing fence
+            lines.push(Line::from(vec![Span::styled(
+                "```".to_string(),
+                theme.code_fence_style(),
+            )]));
         }
         ContentBlock::Details {
             summary,
@@ -953,10 +877,16 @@ fn render_block_to_lines(
     lines
 }
 
-fn render_inline_elements(elements: &[InlineElement], theme: &Theme) -> Vec<Span<'static>> {
+fn render_inline_elements(
+    elements: &[InlineElement],
+    theme: &Theme,
+    selected_inline_idx: Option<usize>,
+) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
 
-    for element in elements {
+    for (idx, element) in elements.iter().enumerate() {
+        let is_selected = selected_inline_idx == Some(idx);
+
         match element {
             InlineElement::Text { value } => {
                 spans.push(Span::styled(value.clone(), theme.text_style()));
@@ -971,12 +901,19 @@ fn render_inline_elements(elements: &[InlineElement], theme: &Theme) -> Vec<Span
                 spans.push(Span::styled(value.clone(), theme.inline_code_style()));
             }
             InlineElement::Link { text, .. } => {
-                spans.push(Span::styled(
-                    text.clone(),
+                let style = if is_selected {
+                    // Highlighted selected link - matches table cell selection style
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Rgb(100, 200, 255))
+                        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+                } else {
+                    // Normal link style
                     Style::default()
                         .fg(Color::Rgb(100, 150, 255))
-                        .add_modifier(Modifier::UNDERLINED),
-                ));
+                        .add_modifier(Modifier::UNDERLINED)
+                };
+                spans.push(Span::styled(text.clone(), style));
             }
             InlineElement::Strikethrough { value } => {
                 spans.push(Span::styled(
@@ -987,10 +924,16 @@ fn render_inline_elements(elements: &[InlineElement], theme: &Theme) -> Vec<Span
                 ));
             }
             InlineElement::Image { alt, .. } => {
-                spans.push(Span::styled(
-                    format!("🖼 {}", alt),
-                    Style::default().fg(Color::Rgb(150, 150, 180)),
-                ));
+                let style = if is_selected {
+                    // Highlighted selected image
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Rgb(100, 200, 255))
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Rgb(180, 180, 200))
+                };
+                spans.push(Span::styled(format!("🖼 {}", alt), style));
             }
         }
     }
@@ -1000,277 +943,6 @@ fn render_inline_elements(elements: &[InlineElement], theme: &Theme) -> Vec<Span
     }
 
     spans
-}
-
-fn render_table(
-    headers: &[String],
-    alignments: &[Alignment],
-    rows: &[Vec<String>],
-    theme: &Theme,
-    is_selected: bool,
-    in_table_mode: bool,
-    selected_cell: Option<(usize, usize)>,
-) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-
-    if headers.is_empty() {
-        return lines;
-    }
-
-    // Calculate column widths using Unicode display width
-    let col_count = headers.len();
-    let mut col_widths: Vec<usize> = headers.iter().map(|h| h.width()).collect();
-
-    for row in rows {
-        for (i, cell) in row.iter().enumerate().take(col_count) {
-            col_widths[i] = col_widths[i].max(cell.width());
-        }
-    }
-
-    // Add padding
-    for width in &mut col_widths {
-        *width += 2; // 1 space on each side
-    }
-
-    // Top border (add selection indicator or spacing)
-    let mut top_border_spans = vec![];
-
-    if in_table_mode {
-        // In table mode, add spacing to align with row arrows
-        top_border_spans.push(Span::raw("  "));
-    } else if is_selected {
-        // Not in table nav mode: show arrow if table is selected as element
-        top_border_spans.push(Span::styled(
-            "→ ",
-            Style::default()
-                .fg(Color::Rgb(100, 200, 255))
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-
-    let mut top_border = String::from("┌");
-    for (i, &width) in col_widths.iter().enumerate() {
-        top_border.push_str(&"─".repeat(width));
-        if i < col_widths.len() - 1 {
-            top_border.push('┬');
-        }
-    }
-    top_border.push('┐');
-    top_border_spans.push(Span::styled(
-        top_border,
-        Style::default().fg(Color::Rgb(100, 100, 120)),
-    ));
-    lines.push(Line::from(top_border_spans));
-
-    // Header row (row 0)
-    let header_line = render_table_row(
-        headers,
-        &col_widths,
-        alignments,
-        &TableRenderContext {
-            theme,
-            row_num: 0,
-            is_header: true,
-            in_table_mode,
-            is_table_selected: is_selected,
-            selected_cell,
-        },
-    );
-    lines.push(header_line);
-
-    // Header separator
-    let mut separator_spans = vec![];
-    if in_table_mode || is_selected {
-        separator_spans.push(Span::raw("  "));
-    }
-    let mut separator = String::from("├");
-    for (i, &width) in col_widths.iter().enumerate() {
-        separator.push_str(&"─".repeat(width));
-        if i < col_widths.len() - 1 {
-            separator.push('┼');
-        }
-    }
-    separator.push('┤');
-    separator_spans.push(Span::styled(
-        separator,
-        Style::default().fg(Color::Rgb(100, 100, 120)),
-    ));
-    lines.push(Line::from(separator_spans));
-
-    // Data rows
-    for (row_idx, row) in rows.iter().enumerate() {
-        let data_row = row_idx + 1; // +1 because row 0 is header
-        let row_line = render_table_row(
-            row,
-            &col_widths,
-            alignments,
-            &TableRenderContext {
-                theme,
-                row_num: data_row,
-                is_header: false,
-                in_table_mode,
-                is_table_selected: is_selected,
-                selected_cell,
-            },
-        );
-        lines.push(row_line);
-    }
-
-    // Bottom border
-    let mut bottom_border_spans = vec![];
-    if in_table_mode || is_selected {
-        bottom_border_spans.push(Span::raw("  "));
-    }
-    let mut bottom_border = String::from("└");
-    for (i, &width) in col_widths.iter().enumerate() {
-        bottom_border.push_str(&"─".repeat(width));
-        if i < col_widths.len() - 1 {
-            bottom_border.push('┴');
-        }
-    }
-    bottom_border.push('┘');
-    bottom_border_spans.push(Span::styled(
-        bottom_border,
-        Style::default().fg(Color::Rgb(100, 100, 120)),
-    ));
-    lines.push(Line::from(bottom_border_spans));
-
-    lines
-}
-
-struct TableRenderContext<'a> {
-    theme: &'a Theme,
-    row_num: usize,
-    is_header: bool,
-    in_table_mode: bool,
-    is_table_selected: bool,
-    selected_cell: Option<(usize, usize)>,
-}
-
-fn render_table_row(
-    cells: &[String],
-    col_widths: &[usize],
-    alignments: &[Alignment],
-    ctx: &TableRenderContext,
-) -> Line<'static> {
-    let mut spans = Vec::new();
-
-    // Add arrow or space to keep table aligned when selected or in table mode
-    if ctx.in_table_mode {
-        // In table mode: show arrow on selected row, spaces on others
-        let is_selected_row = ctx.selected_cell.map(|(r, _)| r) == Some(ctx.row_num);
-        if is_selected_row {
-            spans.push(Span::styled(
-                "→ ",
-                Style::default()
-                    .fg(Color::Rgb(100, 200, 255))
-                    .add_modifier(Modifier::BOLD),
-            ));
-        } else {
-            spans.push(Span::raw("  ")); // Two spaces to match arrow width
-        }
-    } else if ctx.is_table_selected {
-        // Table selected but not in nav mode: add spacing to align with top arrow
-        spans.push(Span::raw("  "));
-    }
-
-    spans.push(Span::styled(
-        "│",
-        Style::default().fg(Color::Rgb(100, 100, 120)),
-    ));
-
-    for (i, cell) in cells.iter().enumerate() {
-        let width = col_widths.get(i).copied().unwrap_or(10);
-        let alignment = alignments.get(i).unwrap_or(&Alignment::Left);
-
-        let cell_text = align_text(cell, width, alignment);
-
-        // Determine if this specific cell is selected
-        let is_selected = ctx.selected_cell == Some((ctx.row_num, i));
-
-        let style = if is_selected {
-            // Highlighted selected cell
-            Style::default()
-                .fg(Color::Black)
-                .bg(Color::Rgb(100, 200, 255))
-                .add_modifier(Modifier::BOLD)
-        } else if ctx.is_header {
-            Style::default()
-                .fg(ctx.theme.heading_color(3))
-                .add_modifier(Modifier::BOLD)
-        } else {
-            ctx.theme.text_style()
-        };
-
-        spans.push(Span::styled(cell_text, style));
-        spans.push(Span::styled(
-            "│",
-            Style::default().fg(Color::Rgb(100, 100, 120)),
-        ));
-    }
-
-    Line::from(spans)
-}
-
-/// Detect checkbox markers in text and return (is_task, checked, text_after_marker)
-fn detect_checkbox_in_text(text: &str) -> (bool, bool, &str) {
-    let trimmed = text.trim_start();
-
-    // Check for [x] or [X] (checked)
-    if let Some(stripped) = trimmed
-        .strip_prefix("[x]")
-        .or_else(|| trimmed.strip_prefix("[X]"))
-    {
-        return (true, true, stripped.trim_start());
-    }
-
-    // Check for [ ] (unchecked)
-    if let Some(stripped) = trimmed.strip_prefix("[ ]") {
-        return (true, false, stripped.trim_start());
-    }
-
-    // Not a task list item
-    (false, false, text)
-}
-
-fn align_text(text: &str, width: usize, alignment: &Alignment) -> String {
-    // Use Unicode display width instead of character/byte length
-    let text_width = text.width();
-
-    // If text is longer than width, truncate it
-    if text_width >= width {
-        // TODO: Proper Unicode-aware truncation
-        if width > 5 {
-            // Approximate truncation - not perfect but better than nothing
-            let approx_chars = width.saturating_sub(5);
-            let truncated = text.chars().take(approx_chars).collect::<String>();
-            return format!(" {}... ", truncated);
-        }
-        return format!(" {} ", text);
-    }
-
-    // Width includes padding we added earlier
-    let content_width = width;
-
-    match alignment {
-        Alignment::Left | Alignment::None => {
-            // Left-aligned: " text     "
-            let right_padding = content_width.saturating_sub(text_width + 1);
-            format!(" {}{}", text, " ".repeat(right_padding))
-        }
-        Alignment::Center => {
-            // Center-aligned: "  text   "
-            let total_padding = content_width.saturating_sub(text_width);
-            let left_pad = total_padding / 2;
-            let right_pad = total_padding - left_pad;
-            format!("{}{}{}", " ".repeat(left_pad), text, " ".repeat(right_pad))
-        }
-        Alignment::Right => {
-            // Right-aligned: "     text "
-            let left_padding = content_width.saturating_sub(text_width + 1);
-            format!("{}{} ", " ".repeat(left_padding), text)
-        }
-    }
 }
 
 fn format_inline_markdown<'a>(text: &str, theme: &Theme) -> Vec<Span<'a>> {
@@ -1345,182 +1017,4 @@ fn format_inline_markdown<'a>(text: &str, theme: &Theme) -> Vec<Span<'a>> {
     }
 
     spans
-}
-
-fn render_search_overlay(frame: &mut Frame, app: &App, area: Rect) {
-    let search_area = Rect {
-        x: area.x + 2,
-        y: area.y + 2,
-        width: area.width.saturating_sub(4).max(40),
-        height: 3,
-    };
-
-    frame.render_widget(Clear, search_area);
-
-    let search_text = format!("Search: {}_", app.search_query);
-    let paragraph = Paragraph::new(search_text)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Yellow))
-                .title(" Filter Headings ")
-                .style(Style::default().bg(Color::Rgb(30, 30, 50))),
-        )
-        .style(Style::default().fg(Color::White));
-
-    frame.render_widget(paragraph, search_area);
-}
-
-fn render_theme_picker(frame: &mut Frame, app: &App, area: Rect) {
-    use crate::tui::theme::ThemeName;
-
-    let theme = &app.theme;
-
-    // All available themes
-    let themes = [
-        (
-            ThemeName::OceanDark,
-            "Ocean Dark",
-            "Base16 Ocean with cool blues",
-        ),
-        (ThemeName::Nord, "Nord", "Arctic, north-bluish palette"),
-        (
-            ThemeName::Dracula,
-            "Dracula",
-            "Dark theme with vibrant colors",
-        ),
-        (
-            ThemeName::Solarized,
-            "Solarized",
-            "Precision colors for machines and people",
-        ),
-        (
-            ThemeName::Monokai,
-            "Monokai",
-            "Sublime Text's iconic scheme",
-        ),
-        (ThemeName::Gruvbox, "Gruvbox", "Retro groove color scheme"),
-        (
-            ThemeName::TokyoNight,
-            "Tokyo Night",
-            "Modern night theme for low-light",
-        ),
-        (
-            ThemeName::CatppuccinMocha,
-            "Catppuccin Mocha",
-            "Soothing pastel theme for night coding",
-        ),
-    ];
-
-    // Create centered popup area
-    let popup_area = centered_area(area, 60, 50);
-
-    // Clear background
-    frame.render_widget(Clear, popup_area);
-
-    // Create lines for each theme
-    let mut lines = vec![
-        Line::from(vec![Span::styled(
-            "Select Theme (j/k to navigate, Enter to apply, Esc to cancel)",
-            Style::default()
-                .fg(theme.modal_description())
-                .add_modifier(Modifier::ITALIC),
-        )]),
-        Line::from(""),
-    ];
-
-    for (idx, (theme_name, name, description)) in themes.iter().enumerate() {
-        let is_selected = idx == app.theme_picker_selected;
-        let is_current = *theme_name == app.current_theme;
-
-        let (prefix, style) = if is_selected {
-            (
-                "▶ ",
-                Style::default()
-                    .fg(theme.modal_selected_fg())
-                    .add_modifier(Modifier::BOLD),
-            )
-        } else {
-            ("  ", Style::default().fg(theme.modal_text()))
-        };
-
-        let current_marker = if is_current { " ✓" } else { "" };
-        let line_text = format!("{}{}{}", prefix, name, current_marker);
-
-        lines.push(Line::from(vec![Span::styled(line_text, style)]));
-
-        // Add description on next line if selected
-        if is_selected {
-            lines.push(Line::from(vec![Span::styled(
-                format!("  {}", description),
-                Style::default()
-                    .fg(theme.modal_description())
-                    .add_modifier(Modifier::ITALIC),
-            )]));
-        }
-    }
-
-    lines.push(Line::from(""));
-
-    let paragraph = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme.modal_border()))
-                .title(" Theme Selector ")
-                .style(Style::default().bg(theme.modal_bg())),
-        )
-        .wrap(Wrap { trim: false });
-
-    frame.render_widget(paragraph, popup_area);
-}
-
-fn render_cell_edit_overlay(frame: &mut Frame, app: &App, area: Rect) {
-    let theme = &app.theme;
-
-    // Create centered popup area
-    let edit_area = Rect {
-        x: area.x + area.width / 4,
-        y: area.y + area.height / 3,
-        width: area.width / 2,
-        height: 5,
-    };
-
-    // Clear background
-    frame.render_widget(Clear, edit_area);
-
-    // Create edit display
-    let edit_text = format!(
-        "Edit Cell [{},{}]: {}_",
-        app.cell_edit_row, app.cell_edit_col, app.cell_edit_value
-    );
-
-    let paragraph = Paragraph::new(vec![
-        Line::from(vec![Span::styled(
-            "Edit Table Cell",
-            Style::default()
-                .fg(theme.modal_title())
-                .add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            edit_text,
-            Style::default().fg(Color::White),
-        )]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "Enter: Save • Esc: Cancel",
-            Style::default()
-                .fg(theme.modal_description())
-                .add_modifier(Modifier::ITALIC),
-        )]),
-    ])
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme.modal_border()))
-            .style(Style::default().bg(theme.modal_bg())),
-    );
-
-    frame.render_widget(paragraph, edit_area);
 }
