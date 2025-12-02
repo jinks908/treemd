@@ -70,6 +70,13 @@ To install it, simply run:
 pkgin install treemd
 ```
 
+[Homebrew](https://brew.sh) hosts precompiled binaries for macOS and Linux.
+To install it, simply run:
+
+```bash
+brew install treemd
+```
+
 ## Usage
 
 ### TUI Mode (Interactive - Default)
