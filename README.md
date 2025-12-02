@@ -63,11 +63,25 @@ cargo install --path .
 
 ### Using a package manager
 
-`treemd` is available as a native package on NetBSD.
-To install it, simply run:
+`treemd` is available as a native package on Arch Linux and NetBSD.
+
+**Arch Linux ([`extra`](https://archlinux.org/packages/extra/x86_64/treemd/) repo):**
+
+```bash
+pacman -S treemd
+```
+
+**NetBSD:**
 
 ```bash
 pkgin install treemd
+```
+
+[Homebrew](https://brew.sh) hosts precompiled binaries for macOS and Linux.
+To install it, simply run:
+
+```bash
+brew install treemd
 ```
 
 ## Usage
@@ -582,6 +596,10 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 - `less` - Classic pager (no structure awareness)
 
 treemd combines the best of these: **tree-based exploration** + interactive navigation + comfortable reading + CLI scriptability.
+
+## Acknowledgements
+
+[![Built With Ratatui](https://img.shields.io/badge/Built_With_Ratatui-000?logo=ratatui&logoColor=fff)](https://ratatui.rs/)
 
 ## License
 
