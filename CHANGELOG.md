@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.4] - 2025-12-04
+
+### Added
+
+- **Raw source view toggle** - Press `r` to toggle between rendered markdown and raw source view ([#19](https://github.com/Epistates/treemd/issues/19))
+  - Shows original markdown with line numbers for debugging rendering issues
+  - `[RAW]` indicator in title bar and status bar when active
+  - Maintains scroll position when toggling
+
+- **Link search/filter in link navigator** - Press `/` in link follow mode to filter links by text or URL
+  - Case-insensitive search across link text and targets
+  - Selection stays within filtered results
+  - Press `Esc` to clear filter or exit search mode
+
+- **Links in list items** - Interactive mode now extracts and navigates to links within list item content
+  - Previously only standalone links were indexed; now links embedded in list items are accessible
+  - Links are indexed per-item with proper highlighting
+
+- **Selection indicator backgrounds** - Added background colors to selection indicators for better visibility
+  - `selection_indicator_bg` theme field for customizing the background color
+  - Improves contrast in all themes, especially on light backgrounds
+
+### Changed
+
+- **Status messages auto-dismiss** - Temporary status messages now auto-clear after 1 second
+  - Event loop uses polling with 100ms timeout for responsive UI updates
+  - No more stale "Rendered view enabled" messages lingering
+
+### Technical
+
+- **Event polling for piped stdin** - Added `poll_event()` to `tty` module for non-blocking event handling
+  - Supports the same stdin redirection logic as `read_event()` for piped input scenarios
+  - Enables timed UI updates without user input
+
 ## [0.4.3] - 2025-12-03
 
 ### Added
