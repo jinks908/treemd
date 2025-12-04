@@ -14,7 +14,7 @@ pub use theme::ThemeName;
 
 use color_eyre::Result;
 use crossterm::ExecutableCommand;
-use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEventKind};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
@@ -267,11 +267,14 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                         match key.code {
                             KeyCode::Esc | KeyCode::Char('i') => app.exit_interactive_mode(),
                             KeyCode::Tab => {
-                                if key.modifiers.contains(KeyModifiers::SHIFT) {
-                                    app.interactive_state.previous();
-                                } else {
-                                    app.interactive_state.next();
-                                }
+                                app.interactive_state.next();
+                                // Auto-scroll to keep element in view
+                                app.scroll_to_interactive_element(20);
+                                // Update status bar
+                                app.status_message = Some(app.interactive_state.status_text());
+                            }
+                            KeyCode::BackTab => {
+                                app.interactive_state.previous();
                                 // Auto-scroll to keep element in view
                                 app.scroll_to_interactive_element(20);
                                 // Update status bar
@@ -302,6 +305,13 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                                 if let Err(e) = app.activate_interactive_element() {
                                     app.status_message = Some(format!("✗ Error: {}", e));
                                 }
+                            }
+                            // Page motions in interactive mode
+                            KeyCode::Char('d') | KeyCode::PageDown => {
+                                app.scroll_page_down_interactive();
+                            }
+                            KeyCode::Char('u') | KeyCode::PageUp => {
+                                app.scroll_page_up_interactive();
                             }
                             KeyCode::Char('q') => return Ok(()),
                             _ => {}
@@ -393,11 +403,10 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                                 app.update_content_metrics();
                             }
                             KeyCode::Tab => {
-                                if key.modifiers.contains(KeyModifiers::SHIFT) {
-                                    app.previous_link();
-                                } else {
-                                    app.next_link();
-                                }
+                                app.next_link();
+                            }
+                            KeyCode::BackTab => {
+                                app.previous_link();
                             }
                             KeyCode::Char('/') => {
                                 // Start search mode
