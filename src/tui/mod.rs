@@ -366,14 +366,6 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                                 }
                                 app.update_content_metrics();
                             }
-                        }
-                        KeyCode::Char('l') | KeyCode::Down => app.next_link(),
-                        KeyCode::Char('k') | KeyCode::Up => app.previous_link(),
-                        KeyCode::Char(c @ '1'..='9') => {
-                            // Direct link selection by number
-                            let idx = c.to_digit(10).unwrap() as usize - 1;
-                            if idx < app.links_in_view.len() {
-                                app.selected_link_idx = Some(idx);
                             KeyCode::Backspace => {
                                 app.link_search_pop();
                             }
