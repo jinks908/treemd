@@ -64,6 +64,12 @@ pub struct Content {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Block {
+    /// Sub-heading within a section
+    Heading {
+        level: usize,
+        content: String,
+        inline: Vec<InlineElement>,
+    },
     Paragraph {
         content: String,
         inline: Vec<InlineElement>,
@@ -111,6 +117,9 @@ pub struct ListItem {
     pub content: String,
     /// Parsed inline elements
     pub inline: Vec<InlineElement>,
+    /// Nested blocks (e.g., code blocks inside list items)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks: Vec<Block>,
 }
 
 /// Inline formatting elements

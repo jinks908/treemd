@@ -153,6 +153,8 @@ struct ParserState {
     item_depth: usize,
     task_list_marker: Option<bool>,
     saved_task_markers: Vec<Option<bool>>,
+    /// Blocks accumulated within the current list item (code blocks, paragraphs, etc.)
+    item_blocks: Vec<Block>,
     code_buffer: String,
     code_language: Option<String>,
     code_start_line: usize,
@@ -161,11 +163,18 @@ struct ParserState {
     table_alignments: Vec<Alignment>,
     table_rows: Vec<Vec<String>>,
     current_row: Vec<String>,
+    /// Current heading level (when inside a heading)
+    heading_level: Option<usize>,
+    /// Buffer for heading content
+    heading_buffer: String,
+    /// Inline elements for heading
+    heading_inline: Vec<InlineElement>,
     in_paragraph: bool,
     in_list: bool,
     in_code: bool,
     in_blockquote: bool,
     in_table: bool,
+    in_heading: bool,
     in_strong: bool,
     in_emphasis: bool,
     in_strikethrough: bool,
@@ -190,6 +199,7 @@ impl ParserState {
             item_depth: 0,
             task_list_marker: None,
             saved_task_markers: Vec::new(),
+            item_blocks: Vec::new(),
             code_buffer: String::new(),
             code_language: None,
             code_start_line: 0,
@@ -198,11 +208,15 @@ impl ParserState {
             table_alignments: Vec::new(),
             table_rows: Vec::new(),
             current_row: Vec::new(),
+            heading_level: None,
+            heading_buffer: String::new(),
+            heading_inline: Vec::new(),
             in_paragraph: false,
             in_list: false,
             in_code: false,
             in_blockquote: false,
             in_table: false,
+            in_heading: false,
             in_strong: false,
             in_emphasis: false,
             in_strikethrough: false,
@@ -329,7 +343,18 @@ fn process_event(event: Event, state: &mut ParserState, blocks: &mut Vec<Block>)
             state.in_paragraph = true;
         }
         Event::End(TagEnd::Paragraph) => {
-            state.flush_paragraph(blocks);
+            // When inside a list item, add paragraph to item_blocks instead of main blocks
+            if state.item_depth >= 1 && state.in_paragraph && !state.paragraph_buffer.is_empty() {
+                state.item_blocks.push(Block::Paragraph {
+                    content: state.paragraph_buffer.clone(),
+                    inline: state.inline_buffer.clone(),
+                });
+                state.paragraph_buffer.clear();
+                state.inline_buffer.clear();
+                state.in_paragraph = false;
+            } else {
+                state.flush_paragraph(blocks);
+            }
         }
         Event::Start(Tag::CodeBlock(kind)) => {
             state.in_code = true;
@@ -346,7 +371,20 @@ fn process_event(event: Event, state: &mut ParserState, blocks: &mut Vec<Block>)
             };
         }
         Event::End(TagEnd::CodeBlock) => {
-            state.flush_code(blocks);
+            // When inside a list item, add code block to item_blocks instead of main blocks
+            if state.item_depth >= 1 && state.in_code && !state.code_buffer.is_empty() {
+                state.item_blocks.push(Block::Code {
+                    language: state.code_language.clone(),
+                    content: state.code_buffer.trim_end().to_string(),
+                    start_line: state.code_start_line,
+                    end_line: state.current_line,
+                });
+                state.code_buffer.clear();
+                state.code_language = None;
+                state.in_code = false;
+            } else {
+                state.flush_code(blocks);
+            }
         }
         Event::Start(Tag::List(start_number)) => {
             state.list_depth += 1;
@@ -372,10 +410,11 @@ fn process_event(event: Event, state: &mut ParserState, blocks: &mut Vec<Block>)
                 state.task_list_marker = None;
             }
 
-            // Only clear buffer for root-level items
+            // Only clear buffers for root-level items
             if state.item_depth == 1 {
                 state.paragraph_buffer.clear();
                 state.inline_buffer.clear();
+                state.item_blocks.clear();
             }
         }
         Event::End(TagEnd::Item) => {
@@ -388,13 +427,39 @@ fn process_event(event: Event, state: &mut ParserState, blocks: &mut Vec<Block>)
 
             // Only save items at root level (depth 1)
             if state.item_depth == 1 {
+                // Determine content/inline fields:
+                // 1. If paragraph_buffer has content (tight list item - no paragraph wrapper), use it
+                // 2. Else if item_blocks starts with a Paragraph, extract it
+                // 3. Else use empty content
+                let (content, inline, remaining_blocks) = if !state.paragraph_buffer.is_empty() {
+                    // Tight list item: text was added directly without paragraph wrapper
+                    let all_blocks: Vec<Block> = state.item_blocks.drain(..).collect();
+                    (
+                        state.paragraph_buffer.clone(),
+                        state.inline_buffer.clone(),
+                        all_blocks,
+                    )
+                } else if let Some(Block::Paragraph { content, inline }) =
+                    state.item_blocks.first().cloned()
+                {
+                    // Loose list item: first block is a paragraph
+                    let remaining: Vec<Block> = state.item_blocks.drain(1..).collect();
+                    (content, inline, remaining)
+                } else {
+                    // Item starts with code block or other non-paragraph block
+                    let all_blocks: Vec<Block> = state.item_blocks.drain(..).collect();
+                    (String::new(), Vec::new(), all_blocks)
+                };
+
                 state.list_items.push(ListItem {
                     checked: state.task_list_marker,
-                    content: state.paragraph_buffer.clone(),
-                    inline: state.inline_buffer.clone(),
+                    content,
+                    inline,
+                    blocks: remaining_blocks,
                 });
                 state.paragraph_buffer.clear();
                 state.inline_buffer.clear();
+                state.item_blocks.clear();
                 state.task_list_marker = None;
             }
             state.item_depth = state.item_depth.saturating_sub(1);
@@ -563,6 +628,27 @@ fn process_event(event: Event, state: &mut ParserState, blocks: &mut Vec<Block>)
                 state.code_buffer.push_str(&text);
             } else if state.in_blockquote {
                 state.blockquote_buffer.push_str(&text);
+            } else if state.in_heading {
+                // Accumulate heading text and inline elements
+                state.heading_buffer.push_str(&text);
+                let element = if state.in_code_inline {
+                    InlineElement::Code {
+                        value: text.to_string(),
+                    }
+                } else if state.in_strong {
+                    InlineElement::Strong {
+                        value: text.to_string(),
+                    }
+                } else if state.in_emphasis {
+                    InlineElement::Emphasis {
+                        value: text.to_string(),
+                    }
+                } else {
+                    InlineElement::Text {
+                        value: text.to_string(),
+                    }
+                };
+                state.heading_inline.push(element);
             } else if state.in_link || state.in_image {
                 state.link_text.push_str(&text);
             } else {
@@ -608,15 +694,31 @@ fn process_event(event: Event, state: &mut ParserState, blocks: &mut Vec<Block>)
             state.flush_paragraph(blocks);
             blocks.push(Block::HorizontalRule);
         }
-        Event::Start(Tag::Heading { .. }) => {
-            // Clear buffers when entering a heading - we don't include headings in parsed blocks
-            state.paragraph_buffer.clear();
-            state.inline_buffer.clear();
+        Event::Start(Tag::Heading { level, .. }) => {
+            // Flush any pending content before the heading
+            state.flush_paragraph(blocks);
+            // Start tracking heading content
+            state.in_heading = true;
+            state.heading_level = Some(level as usize);
+            state.heading_buffer.clear();
+            state.heading_inline.clear();
         }
         Event::End(TagEnd::Heading(_)) => {
-            // Clear buffers after heading to prevent text leaking into next paragraph
-            state.paragraph_buffer.clear();
-            state.inline_buffer.clear();
+            // Create a heading block from accumulated content
+            if state.in_heading && !state.heading_buffer.is_empty() {
+                if let Some(level) = state.heading_level {
+                    blocks.push(Block::Heading {
+                        level,
+                        content: state.heading_buffer.clone(),
+                        inline: state.heading_inline.clone(),
+                    });
+                }
+            }
+            // Clear heading state
+            state.in_heading = false;
+            state.heading_level = None;
+            state.heading_buffer.clear();
+            state.heading_inline.clear();
         }
         _ => {}
     }
@@ -641,4 +743,105 @@ pub fn slugify(text: &str) -> String {
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("-")
+}
+
+#[cfg(test)]
+mod content_tests {
+    use super::*;
+
+    #[test]
+    fn test_list_with_code_block() {
+        // Issue #8: Numbered lists with code blocks should render correctly
+        let markdown = r#"1. Test1:
+   ```
+   test1
+   ```
+
+2. Test2:
+   test2"#;
+
+        let blocks = parse_content(markdown, 0);
+
+        // Should produce a single List block
+        assert_eq!(blocks.len(), 1);
+
+        if let Block::List { ordered, items } = &blocks[0] {
+            assert!(ordered, "Should be an ordered list");
+            assert_eq!(items.len(), 2, "Should have 2 items");
+
+            // First item: "Test1:" with a code block
+            assert_eq!(items[0].content, "Test1:");
+            assert_eq!(
+                items[0].blocks.len(),
+                1,
+                "First item should have 1 nested block"
+            );
+            if let Block::Code { content, .. } = &items[0].blocks[0] {
+                assert_eq!(content, "test1");
+            } else {
+                panic!("Expected Code block in first item");
+            }
+
+            // Second item: "Test2: test2" with no nested blocks
+            assert!(items[1].content.contains("Test2:"));
+            assert!(items[1].content.contains("test2"));
+            assert!(
+                items[1].blocks.is_empty(),
+                "Second item should have no nested blocks"
+            );
+        } else {
+            panic!("Expected List block");
+        }
+    }
+
+    #[test]
+    fn test_list_starting_with_code_block() {
+        // Edge case: list item that starts with a code block (no leading paragraph)
+        let markdown = r#"1. ```
+   code only
+   ```"#;
+
+        let blocks = parse_content(markdown, 0);
+        assert_eq!(blocks.len(), 1);
+
+        if let Block::List { items, .. } = &blocks[0] {
+            assert_eq!(items.len(), 1);
+            // Content should be empty since item starts with code block
+            assert!(items[0].content.is_empty());
+            assert_eq!(items[0].blocks.len(), 1);
+        } else {
+            panic!("Expected List block");
+        }
+    }
+
+    #[test]
+    fn test_list_with_multiple_code_blocks() {
+        let markdown = r#"1. First item:
+   ```rust
+   fn main() {}
+   ```
+   ```python
+   print("hello")
+   ```"#;
+
+        let blocks = parse_content(markdown, 0);
+        assert_eq!(blocks.len(), 1);
+
+        if let Block::List { items, .. } = &blocks[0] {
+            assert_eq!(items.len(), 1);
+
+            // The first text becomes content, code blocks go to blocks field
+            assert_eq!(items[0].content, "First item:");
+            assert_eq!(items[0].blocks.len(), 2, "Should have 2 code blocks");
+
+            if let Block::Code { language, .. } = &items[0].blocks[0] {
+                assert_eq!(language.as_deref(), Some("rust"));
+            }
+            if let Block::Code { language, .. } = &items[0].blocks[1] {
+                assert_eq!(language.as_deref(), Some("python"));
+            }
+        } else {
+            panic!("Expected List block");
+        }
+    }
 }

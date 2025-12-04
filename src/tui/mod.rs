@@ -1,9 +1,10 @@
 mod app;
+mod help_text;
 mod interactive;
 mod syntax;
 pub mod terminal_compat;
 pub mod theme;
-pub mod tty;  // Public module for TTY handling
+pub mod tty; // Public module for TTY handling
 mod ui;
 
 pub use app::App;
@@ -19,6 +20,7 @@ use crossterm::terminal::{
 };
 use ratatui::DefaultTerminal;
 use std::io::stdout;
+use std::time::Duration;
 
 /// Suspend the TUI, run an external editor, then restore the TUI
 fn run_editor(terminal: &mut DefaultTerminal, file_path: &std::path::PathBuf) -> Result<()> {
@@ -56,6 +58,30 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
 
     loop {
         terminal.draw(|frame| ui::render(frame, &mut app))?;
+
+        // Handle pending editor file open (from link following non-markdown files)
+        if let Some(file_path) = app.pending_editor_file.take() {
+            let filename = file_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file");
+            match run_editor(terminal, &file_path) {
+                Ok(_) => {
+                    app.status_message = Some(format!("✓ Opened {} in editor", filename));
+                }
+                Err(e) => {
+                    app.status_message = Some(format!("✗ Failed to open {}: {}", filename, e));
+                }
+            }
+            continue; // Redraw after returning from editor
+        }
+
+        // Poll for events with timeout to allow status message expiration
+        // Use 100ms timeout for responsive UI updates
+        if !tty::poll_event(Duration::from_millis(100))? {
+            // No event, just continue loop to redraw (handles status message timeout)
+            continue;
+        }
 
         if let Event::Key(key) = tty::read_event()? {
             if key.kind == KeyEventKind::Press {
@@ -239,7 +265,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                         }
 
                         match key.code {
-                            KeyCode::Esc => app.exit_interactive_mode(),
+                            KeyCode::Esc | KeyCode::Char('i') => app.exit_interactive_mode(),
                             KeyCode::Tab => {
                                 if key.modifiers.contains(KeyModifiers::SHIFT) {
                                     app.interactive_state.previous();
@@ -315,20 +341,20 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                     // Clear status message on any key press in link mode
                     app.status_message = None;
 
-                    match key.code {
-                        KeyCode::Esc => app.exit_link_follow_mode(),
-                        KeyCode::Enter => {
-                            if let Err(e) = app.follow_selected_link() {
-                                // Show error in status message
-                                app.status_message = Some(format!("✗ Error: {}", e));
+                    // Handle search input mode
+                    if app.link_search_active {
+                        match key.code {
+                            KeyCode::Esc => {
+                                // Stop search but keep filter
+                                app.stop_link_search();
                             }
-                            app.update_content_metrics();
-                        }
-                        KeyCode::Tab => {
-                            if key.modifiers.contains(KeyModifiers::SHIFT) {
-                                app.previous_link();
-                            } else {
-                                app.next_link();
+                            KeyCode::Enter => {
+                                // Stop search and follow selected link
+                                app.stop_link_search();
+                                if let Err(e) = app.follow_selected_link() {
+                                    app.status_message = Some(format!("✗ Error: {}", e));
+                                }
+                                app.update_content_metrics();
                             }
                         }
                         KeyCode::Char('l') | KeyCode::Down => app.next_link(),
@@ -338,17 +364,67 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                             let idx = c.to_digit(10).unwrap() as usize - 1;
                             if idx < app.links_in_view.len() {
                                 app.selected_link_idx = Some(idx);
+                            KeyCode::Backspace => {
+                                app.link_search_pop();
                             }
+                            KeyCode::Char(c) => {
+                                app.link_search_push(c);
+                            }
+                            KeyCode::Down => app.next_link(),
+                            KeyCode::Up => app.previous_link(),
+                            _ => {}
                         }
-                        KeyCode::Char('p') => {
-                            // Jump to parent heading while staying in link mode
-                            app.jump_to_parent_links();
+                    } else {
+                        // Normal link follow mode
+                        match key.code {
+                            KeyCode::Esc => {
+                                if !app.link_search_query.is_empty() {
+                                    // First Esc clears the search
+                                    app.clear_link_search();
+                                } else {
+                                    app.exit_link_follow_mode();
+                                }
+                            }
+                            KeyCode::Enter => {
+                                if let Err(e) = app.follow_selected_link() {
+                                    // Show error in status message
+                                    app.status_message = Some(format!("✗ Error: {}", e));
+                                }
+                                app.update_content_metrics();
+                            }
+                            KeyCode::Tab => {
+                                if key.modifiers.contains(KeyModifiers::SHIFT) {
+                                    app.previous_link();
+                                } else {
+                                    app.next_link();
+                                }
+                            }
+                            KeyCode::Char('/') => {
+                                // Start search mode
+                                app.start_link_search();
+                            }
+                            KeyCode::Char('j') | KeyCode::Down => app.next_link(),
+                            KeyCode::Char('k') | KeyCode::Up => app.previous_link(),
+                            KeyCode::Char(c @ '1'..='9') => {
+                                // Direct link selection by number (searches original indices)
+                                let idx = c.to_digit(10).unwrap() as usize - 1;
+                                // Find this index in the filtered list
+                                if let Some(display_idx) =
+                                    app.filtered_link_indices.iter().position(|&i| i == idx)
+                                {
+                                    app.selected_link_idx = Some(display_idx);
+                                }
+                            }
+                            KeyCode::Char('p') => {
+                                // Jump to parent heading while staying in link mode
+                                app.jump_to_parent_links();
+                            }
+                            // Copy operations work in link mode too
+                            KeyCode::Char('y') => app.copy_content(),
+                            KeyCode::Char('Y') => app.copy_anchor(),
+                            KeyCode::Char('q') => return Ok(()),
+                            _ => {}
                         }
-                        // Copy operations work in link mode too
-                        KeyCode::Char('y') => app.copy_content(),
-                        KeyCode::Char('Y') => app.copy_anchor(),
-                        KeyCode::Char('q') => return Ok(()),
-                        _ => {}
                     }
                 }
                 // Handle search mode separately
@@ -426,6 +502,8 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                         }
                         // Interactive element navigation
                         KeyCode::Char('i') => app.enter_interactive_mode(),
+                        // Raw source toggle
+                        KeyCode::Char('r') => app.toggle_raw_source(),
                         // Link following
                         KeyCode::Char('f') => app.enter_link_follow_mode(),
                         KeyCode::Char('b') | KeyCode::Backspace => {

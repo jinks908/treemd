@@ -5,6 +5,146 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.4] - 2025-12-04
+
+### Added
+
+- **Raw source view toggle** - Press `r` to toggle between rendered markdown and raw source view ([#19](https://github.com/Epistates/treemd/issues/19))
+  - Shows original markdown with line numbers for debugging rendering issues
+  - `[RAW]` indicator in title bar and status bar when active
+  - Maintains scroll position when toggling
+
+- **Link search/filter in link navigator** - Press `/` in link follow mode to filter links by text or URL
+  - Case-insensitive search across link text and targets
+  - Selection stays within filtered results
+  - Press `Esc` to clear filter or exit search mode
+
+- **Links in list items** - Interactive mode now extracts and navigates to links within list item content
+  - Previously only standalone links were indexed; now links embedded in list items are accessible
+  - Links are indexed per-item with proper highlighting
+
+- **Selection indicator backgrounds** - Added background colors to selection indicators for better visibility
+  - `selection_indicator_bg` theme field for customizing the background color
+  - Improves contrast in all themes, especially on light backgrounds
+
+### Changed
+
+- **Status messages auto-dismiss** - Temporary status messages now auto-clear after 1 second
+  - Event loop uses polling with 100ms timeout for responsive UI updates
+  - No more stale "Rendered view enabled" messages lingering
+
+### Technical
+
+- **Event polling for piped stdin** - Added `poll_event()` to `tty` module for non-blocking event handling
+  - Supports the same stdin redirection logic as `read_event()` for piped input scenarios
+  - Enables timed UI updates without user input
+
+## [0.4.3] - 2025-12-03
+
+### Added
+
+- **Themeable UI colors** - Replaced hardcoded colors with theme-based colors for better customization
+  - Added 6 new themeable color fields: `title_bar_fg`, `scrollbar_fg`, `selection_indicator_fg`, `link_fg`, `link_selected_bg`, `table_border`
+  - All 8 themes now include appropriate colors for these new fields (both RGB and 256-color variants)
+  - Users can now customize title bar, scrollbars, selection indicators, links, and table borders via config file
+  - Consistent theming across all UI elements
+
+### Fixed
+
+- **Search bar overlapping filtered outline results** - Search bar no longer overlaps the outline when filtering headings ([PR #14](https://github.com/Epistates/treemd/pull/14))
+- **Content panes overlapping status bar** - Fixed layout issue where content panes could overlap the status bar ([PR #13](https://github.com/Epistates/treemd/pull/13))
+
+### Refactored
+
+- **Layout builder** - Replaced string-based section IDs with `Section` enum for type-safe layout management
+
+## [0.4.2] - 2025-12-02
+
+### Fixed
+
+- **Sub-headings not displayed in content pane** - Fixed regression where sub-headings within a section were not rendered in the content pane ([#10](https://github.com/Epistates/treemd/issues/10))
+  - Added `Block::Heading` variant to the parser's block types
+  - Sub-headings now render with proper styling (colored, bold, underlined) matching the screenshot in README
+  - Content structure and hierarchy are preserved when viewing sections
+
+- **Link selection visibility in interactive mode** - Selected links now have clear visual highlighting
+  - Previously only a block-level arrow indicated selection, making it unclear which specific link was selected
+  - Now selected links show a `▸` prefix indicator that moves with the selection
+  - Plus cyan background highlight (matching table cell selection style)
+  - Also applies to images in interactive mode
+
+- **Help popup infinite scroll** - Prevented scrolling past the end of help content ([PR #11](https://github.com/Epistates/treemd/pull/11))
+
+- **Numbered lists with nested code blocks** - Fixed markdown display issue where numbered list items containing code blocks would render incorrectly ([#8](https://github.com/Epistates/treemd/issues/8))
+  - List items now properly contain their nested code blocks, blockquotes, and other block elements
+  - Parser correctly associates indented blocks with their parent list items
+  - Renderer handles nested block rendering within list item context
+
+- **Interactive mode toggle** - Pressing `i` now correctly toggles out of interactive mode (previously only entered it)
+
+### Changed
+
+- **Link navigator layout stability** - Link targets now display inline to prevent layout shift when cycling through links ([PR #9](https://github.com/Epistates/treemd/pull/9))
+  - Previously, selected links showed target on a separate line causing list to jump
+  - Now all links show target inline (e.g., `[1] Link Text → target`) for stable navigation
+
+### Refactored
+
+- **Help text module** - Extracted help text content into dedicated `src/tui/help_text.rs` module ([PR #11](https://github.com/Epistates/treemd/pull/11))
+  - Uses typed `HelpLine` enum for clean separation of data and rendering
+  - Compile-time const construction with `const fn` builders
+  - Makes help content easily maintainable and extensible
+
+- **TUI UI module architecture** - Refactored monolithic `ui.rs` (~1700 lines) into modular components for better maintainability
+  - `ui/mod.rs` (~940 lines) - Core rendering orchestration
+  - `ui/util.rs` (~265 lines) - Utility functions: `centered_area`, `detect_checkbox_in_text`, `align_text`
+  - `ui/popups.rs` (~460 lines) - Popup rendering: help, link picker, search, theme selector, cell edit
+  - `ui/table.rs` (~460 lines) - Table rendering: `render_table`, `render_table_row`, `TableRenderContext`
+  - Added comprehensive unit tests for extracted modules (29 new tests)
+  - Zero regressions - all 90 tests pass
+
+### Technical
+
+- **Parser improvements** (`src/parser/content.rs`, `src/parser/output.rs`)
+  - Added `Block::Heading` variant with level, content, and inline elements for sub-heading support
+  - Added `Block::ListItemStart` variant to track list item context during parsing
+  - `parse_content()` now parses headings within content and creates `Block::Heading` blocks
+  - Nested blocks are properly associated with their parent list items instead of being siblings
+
+- **UI module organization** (`src/tui/ui/`)
+  - Clean separation of concerns: utilities, popups, tables, and core rendering
+  - Each module has focused responsibility and comprehensive test coverage
+  - Added `ContentBlock::Heading` rendering with level-appropriate colors and styling
+  - `render_inline_elements()` now accepts optional selection index for inline element highlighting
+  - Links and images in interactive mode get background highlight when selected
+  - Improved code discoverability and maintainability
+
+## [0.4.1] - 2025-12-01
+
+### Fixed
+
+- **Config file `color_mode` setting ignored** - The `color_mode` setting in `config.toml` is now properly respected ([#5](https://github.com/Epistates/treemd/issues/5))
+  - Priority order: CLI flags > config file > auto-detection
+  - Set `color_mode = "rgb"` or `color_mode = "256"` in config to override auto-detection
+  - `color_mode = "auto"` (default) uses improved auto-detection
+
+- **RGB auto-detection fails for truecolor terminals** - Improved terminal color detection for Kitty, Alacritty, WezTerm, and other RGB-capable terminals ([#5](https://github.com/Epistates/treemd/issues/5))
+  - Now checks `COLORTERM` environment variable for `truecolor` or `24bit` (primary standard per [termstandard/colors](https://github.com/termstandard/colors))
+  - Checks `TERM` for known truecolor terminals (`kitty`, `alacritty`, `wezterm`) and suffixes (`-truecolor`, `-direct`)
+  - Checks `TERM_PROGRAM` for known apps (iTerm, Kitty, VS Code, Hyper, etc.)
+  - Falls back to `supports_color` crate detection
+
+### Technical
+
+- **Enhanced color detection** (`src/tui/terminal_compat.rs`)
+  - New `detect_truecolor_support()` method with multi-method detection
+  - Environment variable checks before crate-based detection
+  - Better compatibility with terminals that set `COLORTERM=truecolor`
+
+- **Config priority in main** (`src/main.rs`)
+  - Color mode selection now checks config file before auto-detection
+  - Clear priority: CLI args (highest) > config file > auto-detection (lowest)
+
 ## [0.4.0] - 2025-11-30
 
 ### Added

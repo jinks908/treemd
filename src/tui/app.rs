@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::parser::{Document, HeadingNode, Link, extract_links};
+use crate::tui::help_text;
 use crate::tui::interactive::InteractiveState;
 use crate::tui::syntax::SyntaxHighlighter;
 use crate::tui::terminal_compat::ColorMode;
@@ -7,6 +8,7 @@ use crate::tui::theme::{Theme, ThemeName};
 use ratatui::widgets::{ListState, ScrollbarState};
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Focus {
@@ -55,10 +57,14 @@ pub struct App {
     pub mode: AppMode,
     pub current_file_path: PathBuf, // Path to current file for resolving relative links
     pub links_in_view: Vec<Link>,   // Links in currently displayed content
-    pub selected_link_idx: Option<usize>, // Currently selected link index
+    pub filtered_link_indices: Vec<usize>, // Indices into links_in_view after filtering
+    pub selected_link_idx: Option<usize>, // Currently selected index in filtered list
+    pub link_search_query: String,  // Search query for filtering links
+    pub link_search_active: bool,   // Whether search input is active
     pub file_history: Vec<FileState>, // Back navigation stack
     pub file_future: Vec<FileState>, // Forward navigation stack (for undo back)
     pub status_message: Option<String>, // Temporary status message to display
+    pub status_message_time: Option<Instant>, // When the status message was set
 
     // Interactive element navigation
     pub interactive_state: InteractiveState,
@@ -75,6 +81,12 @@ pub struct App {
     // Configuration persistence
     config: Config,
     color_mode: ColorMode,
+
+    // Pending file to open in external editor (set by link following, consumed by main loop)
+    pub pending_editor_file: Option<PathBuf>,
+
+    // Raw source view toggle
+    pub show_raw_source: bool,
 }
 
 /// Saved state for file navigation history
@@ -154,10 +166,14 @@ impl App {
             mode: AppMode::Normal,
             current_file_path: file_path,
             links_in_view: Vec::new(),
+            filtered_link_indices: Vec::new(),
             selected_link_idx: None,
+            link_search_query: String::new(),
+            link_search_active: false,
             file_history: Vec::new(),
             file_future: Vec::new(),
             status_message: None,
+            status_message_time: None,
 
             // Interactive element navigation
             interactive_state: InteractiveState::new(),
@@ -173,6 +189,41 @@ impl App {
             // Configuration persistence
             config,
             color_mode,
+
+            // Pending editor file
+            pending_editor_file: None,
+
+            // Raw source view (off by default)
+            show_raw_source: false,
+        }
+    }
+
+    /// Toggle between raw source view and rendered markdown view
+    pub fn toggle_raw_source(&mut self) {
+        self.show_raw_source = !self.show_raw_source;
+        let msg = if self.show_raw_source {
+            "Raw source view enabled"
+        } else {
+            "Rendered view enabled"
+        };
+        self.set_status_message(msg);
+    }
+
+    /// Set a status message with automatic timeout tracking
+    pub fn set_status_message(&mut self, msg: &str) {
+        self.status_message = Some(msg.to_string());
+        self.status_message_time = Some(Instant::now());
+    }
+
+    /// Clear status message if it has expired (default 1 second timeout)
+    pub fn clear_expired_status_message(&mut self) {
+        const STATUS_MESSAGE_TIMEOUT: Duration = Duration::from_secs(1);
+
+        if let Some(time) = self.status_message_time {
+            if time.elapsed() >= STATUS_MESSAGE_TIMEOUT {
+                self.status_message = None;
+                self.status_message_time = None;
+            }
         }
     }
 
@@ -349,7 +400,11 @@ impl App {
     }
 
     pub fn scroll_help_down(&mut self) {
-        self.help_scroll = self.help_scroll.saturating_add(1);
+        let new_scroll = self.help_scroll.saturating_add(1);
+        let max_scroll = help_text::HELP_LINES.len() as u16;
+        if new_scroll < max_scroll {
+            self.help_scroll = new_scroll;
+        }
     }
 
     pub fn scroll_help_up(&mut self) {
@@ -771,11 +826,16 @@ impl App {
         // Extract all links from the content
         self.links_in_view = extract_links(&content);
 
+        // Initialize filtered indices to show all links
+        self.filtered_link_indices = (0..self.links_in_view.len()).collect();
+        self.link_search_query.clear();
+        self.link_search_active = false;
+
         // Always enter mode, even if no links (so user sees "no links" message)
         self.mode = AppMode::LinkFollow;
 
         // Select first link if any exist
-        if !self.links_in_view.is_empty() {
+        if !self.filtered_link_indices.is_empty() {
             self.selected_link_idx = Some(0);
         } else {
             self.selected_link_idx = None;
@@ -786,16 +846,83 @@ impl App {
     pub fn exit_link_follow_mode(&mut self) {
         self.mode = AppMode::Normal;
         self.links_in_view.clear();
+        self.filtered_link_indices.clear();
         self.selected_link_idx = None;
+        self.link_search_query.clear();
+        self.link_search_active = false;
         // Don't clear status message here - let it display for a moment
+    }
+
+    /// Start link search mode
+    pub fn start_link_search(&mut self) {
+        if self.mode == AppMode::LinkFollow {
+            self.link_search_active = true;
+        }
+    }
+
+    /// Stop link search mode (but keep the filter)
+    pub fn stop_link_search(&mut self) {
+        self.link_search_active = false;
+    }
+
+    /// Clear link search and show all links
+    pub fn clear_link_search(&mut self) {
+        self.link_search_query.clear();
+        self.link_search_active = false;
+        self.update_link_filter();
+    }
+
+    /// Add a character to the link search query
+    pub fn link_search_push(&mut self, c: char) {
+        self.link_search_query.push(c);
+        self.update_link_filter();
+    }
+
+    /// Remove the last character from the link search query
+    pub fn link_search_pop(&mut self) {
+        self.link_search_query.pop();
+        self.update_link_filter();
+    }
+
+    /// Update the filtered link indices based on the search query
+    fn update_link_filter(&mut self) {
+        let query = self.link_search_query.to_lowercase();
+
+        if query.is_empty() {
+            // Show all links when no search query
+            self.filtered_link_indices = (0..self.links_in_view.len()).collect();
+        } else {
+            // Filter links by text or URL containing the query
+            self.filtered_link_indices = self
+                .links_in_view
+                .iter()
+                .enumerate()
+                .filter(|(_, link)| {
+                    link.text.to_lowercase().contains(&query)
+                        || link.target.as_str().to_lowercase().contains(&query)
+                })
+                .map(|(idx, _)| idx)
+                .collect();
+        }
+
+        // Update selection to stay within filtered results
+        if self.filtered_link_indices.is_empty() {
+            self.selected_link_idx = None;
+        } else if let Some(idx) = self.selected_link_idx {
+            if idx >= self.filtered_link_indices.len() {
+                self.selected_link_idx = Some(0);
+            }
+        } else {
+            self.selected_link_idx = Some(0);
+        }
     }
 
     /// Cycle to the next link (Tab in link follow mode)
     pub fn next_link(&mut self) {
-        if self.mode == AppMode::LinkFollow && !self.links_in_view.is_empty() {
+        if self.mode == AppMode::LinkFollow && !self.filtered_link_indices.is_empty() {
             self.selected_link_idx = Some(match self.selected_link_idx {
                 Some(idx) => {
-                    if idx >= self.links_in_view.len() - 1 {
+                    if idx >= self.filtered_link_indices.len() - 1 {
                         0 // Wrap to first
                     } else {
                         idx + 1
@@ -808,11 +935,11 @@ impl App {
 
     /// Cycle to the previous link (Shift+Tab in link follow mode)
     pub fn previous_link(&mut self) {
-        if self.mode == AppMode::LinkFollow && !self.links_in_view.is_empty() {
+        if self.mode == AppMode::LinkFollow && !self.filtered_link_indices.is_empty() {
             self.selected_link_idx = Some(match self.selected_link_idx {
                 Some(idx) => {
                     if idx == 0 {
-                        self.links_in_view.len() - 1 // Wrap to last
+                        self.filtered_link_indices.len() - 1 // Wrap to last
                     } else {
                         idx - 1
                     }
@@ -870,10 +997,11 @@ impl App {
         }
     }
 
-    /// Get the currently selected link
+    /// Get the currently selected link (from filtered list)
     pub fn get_selected_link(&self) -> Option<&Link> {
         self.selected_link_idx
-            .and_then(|idx| self.links_in_view.get(idx))
+            .and_then(|idx| self.filtered_link_indices.get(idx))
+            .and_then(|&real_idx| self.links_in_view.get(real_idx))
     }
 
     /// Follow the currently selected link
@@ -892,11 +1020,34 @@ impl App {
                 Ok(())
             }
             crate::parser::LinkTarget::RelativeFile { path, anchor } => {
-                // Load the linked file
-                self.load_file(&path, anchor.as_deref())?;
+                // Check if the file is a markdown file
+                let is_markdown = path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| {
+                        let ext_lower = ext.to_lowercase();
+                        ext_lower == "md" || ext_lower == "markdown" || ext_lower == "mdown"
+                    })
+                    .unwrap_or(false);
+
                 let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
-                self.status_message = Some(format!("✓ Opened {}", filename));
-                self.exit_link_follow_mode();
+
+                if is_markdown {
+                    // Load markdown files in treemd
+                    self.load_file(&path, anchor.as_deref())?;
+                    self.status_message = Some(format!("✓ Opened {}", filename));
+                    self.exit_link_follow_mode();
+                } else {
+                    // Open non-markdown files in system editor
+                    let current_dir = self
+                        .current_file_path
+                        .parent()
+                        .ok_or("Cannot determine current directory")?;
+                    let absolute_path = current_dir.join(&path);
+
+                    self.pending_editor_file = Some(absolute_path);
+                    self.exit_link_follow_mode();
+                }
                 Ok(())
             }
             crate::parser::LinkTarget::WikiLink { target, .. } => {
@@ -961,9 +1112,10 @@ impl App {
         }
 
         // Reject paths containing .. components (path traversal)
-        if relative_path.components().any(|c| {
-            matches!(c, std::path::Component::ParentDir)
-        }) {
+        if relative_path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
             return Err("Path traversal (..) is not allowed for security reasons".to_string());
         }
 
@@ -976,10 +1128,9 @@ impl App {
 
         // Verify the resolved path is within allowed boundaries
         // (defense in depth - even though we rejected .., canonicalize to be sure)
-        if let (Ok(canonical_path), Ok(canonical_base)) = (
-            absolute_path.canonicalize(),
-            current_dir.canonicalize(),
-        ) {
+        if let (Ok(canonical_path), Ok(canonical_base)) =
+            (absolute_path.canonicalize(), current_dir.canonicalize())
+        {
             if !canonical_path.starts_with(&canonical_base) {
                 return Err("Path escapes document directory boundary".to_string());
             }
@@ -1467,9 +1618,32 @@ impl App {
                 Ok(())
             }
             LinkTarget::RelativeFile { path, anchor } => {
-                // Load the linked file
-                self.load_file(path, anchor.as_deref())?;
-                self.exit_interactive_mode();
+                // Check if the file is a markdown file
+                let is_markdown = path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| {
+                        let ext_lower = ext.to_lowercase();
+                        ext_lower == "md" || ext_lower == "markdown" || ext_lower == "mdown"
+                    })
+                    .unwrap_or(false);
+
+                if is_markdown {
+                    // Load markdown files in treemd
+                    self.load_file(path, anchor.as_deref())?;
+                    self.exit_interactive_mode();
+                } else {
+                    // Open non-markdown files in system editor
+                    // Resolve path relative to current file
+                    let current_dir = self
+                        .current_file_path
+                        .parent()
+                        .ok_or("Cannot determine current directory")?;
+                    let absolute_path = current_dir.join(path);
+
+                    self.pending_editor_file = Some(absolute_path);
+                    self.exit_interactive_mode();
+                }
                 Ok(())
             }
             LinkTarget::WikiLink { target, .. } => {
