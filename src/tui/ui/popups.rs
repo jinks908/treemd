@@ -67,25 +67,65 @@ pub fn render_link_picker(frame: &mut Frame, app: &App, area: Rect) {
     // Clear background
     frame.render_widget(Clear, popup_area);
 
-    // Create lines for each link
+    // Build header with search info
+    let header_text = if app.link_search_active || !app.link_search_query.is_empty() {
+        format!(
+            "Links ({}/{}) - /: search, Enter: follow, Esc: {}",
+            app.filtered_link_indices.len(),
+            app.links_in_view.len(),
+            if app.link_search_active { "stop search" } else { "cancel" }
+        )
+    } else {
+        format!(
+            "Links in this section ({} found) - /: search, Tab/j/k: navigate, Enter: follow",
+            app.links_in_view.len()
+        )
+    };
+
+    // Create lines for display
     let mut lines = vec![
         Line::from(vec![Span::styled(
-            format!(
-                "Links in this section ({} found) - Tab/j/k to navigate, Enter to follow, Esc to cancel",
-                app.links_in_view.len()
-            ),
+            header_text,
             Style::default()
                 .fg(theme.modal_title())
                 .add_modifier(Modifier::BOLD),
         )]),
-        Line::from(""),
     ];
 
-    for (idx, link) in app.links_in_view.iter().enumerate() {
-        let is_selected = app.selected_link_idx == Some(idx);
+    // Show search bar if active or has query
+    if app.link_search_active || !app.link_search_query.is_empty() {
+        let search_style = if app.link_search_active {
+            Style::default()
+                .fg(theme.modal_selected_fg())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.modal_description())
+        };
 
-        // Format link number and text
-        let number = format!("[{}] ", idx + 1);
+        let cursor = if app.link_search_active { "▌" } else { "" };
+        lines.push(Line::from(vec![
+            Span::styled("Search: ", Style::default().fg(theme.modal_key_fg())),
+            Span::styled(format!("{}{}", app.link_search_query, cursor), search_style),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+
+    // Track the line index where selected link starts (for scrolling)
+    let mut selected_line_start: u16 = 0;
+
+    // Iterate over filtered links
+    for (display_idx, &real_idx) in app.filtered_link_indices.iter().enumerate() {
+        let link = &app.links_in_view[real_idx];
+        let is_selected = app.selected_link_idx == Some(display_idx);
+
+        // Track line position for selected item
+        if is_selected {
+            selected_line_start = lines.len() as u16;
+        }
+
+        // Format link number (show original index for jump commands)
+        let number = format!("[{}] ", real_idx + 1);
         let link_text = &link.text;
 
         // Format target
@@ -126,7 +166,8 @@ pub fn render_link_picker(frame: &mut Frame, app: &App, area: Rect) {
                 Span::styled(
                     link_text.clone(),
                     Style::default()
-                        .fg(theme.modal_selected_fg())
+                        .fg(theme.selection_indicator_fg)
+                        .bg(theme.modal_selected_fg())
                         .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
                 ),
                 Span::styled(
@@ -149,21 +190,63 @@ pub fn render_link_picker(frame: &mut Frame, app: &App, area: Rect) {
         }
 
         // Add blank line between links
-        if idx < app.links_in_view.len() - 1 {
+        if display_idx < app.filtered_link_indices.len() - 1 {
             lines.push(Line::from(""));
         }
     }
 
+    // Show "no matches" message if filter has no results
+    if app.filtered_link_indices.is_empty() && !app.links_in_view.is_empty() {
+        lines.push(Line::from(vec![Span::styled(
+            "No links match your search",
+            Style::default()
+                .fg(theme.modal_description())
+                .add_modifier(Modifier::ITALIC),
+        )]));
+    }
+
     // Add footer
     lines.push(Line::from(""));
+    let footer_text = if app.link_search_active {
+        "Type to filter • Enter: select • Esc: stop search • Backspace: delete"
+    } else {
+        "Tab/j/k: Navigate • /: Search • 1-9: Jump • p: Parent • Enter: Follow • Esc: Cancel"
+    };
     lines.push(Line::from(vec![Span::styled(
-        "Tab/j/k: Navigate • 1-9: Jump • p: Parent • Enter: Follow • Esc: Cancel",
+        footer_text,
         Style::default()
             .fg(theme.modal_description())
             .add_modifier(Modifier::ITALIC),
     )]));
 
-    let paragraph = Paragraph::new(lines)
+    let total_lines = lines.len();
+
+    // Calculate scroll offset to keep selected link visible
+    // Account for popup border (2 lines) and header (2 lines)
+    let inner_height = popup_area.height.saturating_sub(2) as usize; // Border takes 2 lines
+    let header_lines = 2; // Title + blank line
+    let footer_lines = 2; // Blank + footer
+
+    // Visible content area for links
+    let visible_area = inner_height.saturating_sub(header_lines + footer_lines);
+
+    // Calculate scroll offset
+    let scroll_offset = if selected_line_start > 0 && visible_area > 0 {
+        // Keep selected line roughly centered, but don't scroll past bounds
+        let target_line = selected_line_start.saturating_sub(header_lines as u16);
+        let center_offset = (visible_area / 2) as u16;
+
+        if target_line > center_offset {
+            let max_scroll = (total_lines.saturating_sub(inner_height)) as u16;
+            (target_line.saturating_sub(center_offset)).min(max_scroll)
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+
+    let paragraph = Paragraph::new(lines.clone())
         .block(
             Block::default()
                 .borders(Borders::ALL)
@@ -171,9 +254,30 @@ pub fn render_link_picker(frame: &mut Frame, app: &App, area: Rect) {
                 .title(" Link Navigator ")
                 .style(Style::default().bg(theme.modal_bg())),
         )
-        .wrap(Wrap { trim: false });
+        .wrap(Wrap { trim: false })
+        .scroll((scroll_offset, 0));
 
     frame.render_widget(paragraph, popup_area);
+
+    // Render scrollbar if content exceeds visible area
+    if total_lines > inner_height {
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("↑"))
+            .end_symbol(Some("↓"))
+            .style(Style::default().fg(theme.modal_border()));
+
+        let mut scrollbar_state =
+            ScrollbarState::new(total_lines).position(scroll_offset as usize);
+
+        frame.render_stateful_widget(
+            scrollbar,
+            popup_area.inner(ratatui::layout::Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            &mut scrollbar_state,
+        );
+    }
 }
 
 /// Render the theme picker popup
