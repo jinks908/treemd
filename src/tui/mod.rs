@@ -89,7 +89,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                 if app.show_help {
                     match key.code {
                         KeyCode::Char('?') | KeyCode::Esc => app.toggle_help(),
-                        KeyCode::Char('j') | KeyCode::Down => app.scroll_help_down(),
+                        KeyCode::Char('l') | KeyCode::Down => app.scroll_help_down(),
                         KeyCode::Char('k') | KeyCode::Up => app.scroll_help_up(),
                         // Copy operations work in help mode too
                         KeyCode::Char('y') => app.copy_content(),
@@ -103,7 +103,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                     match key.code {
                         KeyCode::Esc => app.toggle_theme_picker(),
                         KeyCode::Enter => app.apply_selected_theme(),
-                        KeyCode::Char('j') | KeyCode::Down => app.theme_picker_next(),
+                        KeyCode::Char('l') | KeyCode::Down => app.theme_picker_next(),
                         KeyCode::Char('k') | KeyCode::Up => app.theme_picker_previous(),
                         // Copy operations work in theme picker too
                         KeyCode::Char('y') => app.copy_content(),
@@ -403,7 +403,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                                 // Start search mode
                                 app.start_link_search();
                             }
-                            KeyCode::Char('j') | KeyCode::Down => app.next_link(),
+                            KeyCode::Char('l') | KeyCode::Down => app.next_link(),
                             KeyCode::Char('k') | KeyCode::Up => app.previous_link(),
                             KeyCode::Char(c @ '1'..='9') => {
                                 // Direct link selection by number (searches original indices)
