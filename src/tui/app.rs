@@ -10,6 +10,9 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+/// Special marker for the document overview entry (shows entire file content)
+pub const DOCUMENT_OVERVIEW: &str = "(Document)";
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Focus {
     Outline,
@@ -123,7 +126,21 @@ impl App {
     ) -> Self {
         let tree = document.build_tree();
         let collapsed_headings = HashSet::new();
-        let outline_items = Self::flatten_tree(&tree, &collapsed_headings);
+        let mut outline_items = Self::flatten_tree(&tree, &collapsed_headings);
+
+        // Add document overview entry if there's preamble content or no headings
+        let has_preamble = Self::has_preamble_content(&document);
+        if has_preamble || document.headings.is_empty() {
+            outline_items.insert(
+                0,
+                OutlineItem {
+                    level: 0, // Level 0 for document overview (renders without # prefix)
+                    text: DOCUMENT_OVERVIEW.to_string(),
+                    expanded: true,
+                    has_children: !outline_items.is_empty(),
+                },
+            );
+        }
 
         let mut outline_state = ListState::default();
         if !outline_items.is_empty() {
@@ -233,6 +250,43 @@ impl App {
                 self.status_message = None;
                 self.status_message_time = None;
             }
+        }
+    }
+
+    /// Check if the document has non-whitespace content before the first heading
+    fn has_preamble_content(document: &Document) -> bool {
+        if document.headings.is_empty() {
+            // No headings at all - entire document is preamble
+            return !document.content.trim().is_empty();
+        }
+
+        // Check if there's content before the first heading
+        let first_heading_offset = document.headings[0].offset;
+        if first_heading_offset == 0 {
+            return false;
+        }
+
+        // Check if there's non-whitespace content before the first heading
+        let preamble = &document.content[..first_heading_offset];
+        !preamble.trim().is_empty()
+    }
+
+    /// Rebuild outline items from the tree, optionally adding document overview
+    fn rebuild_outline_items(&mut self) {
+        self.outline_items = Self::flatten_tree(&self.tree, &self.collapsed_headings);
+
+        // Add document overview entry if there's preamble content or no headings
+        let has_preamble = Self::has_preamble_content(&self.document);
+        if has_preamble || self.document.headings.is_empty() {
+            self.outline_items.insert(
+                0,
+                OutlineItem {
+                    level: 0,
+                    text: DOCUMENT_OVERVIEW.to_string(),
+                    expanded: true,
+                    has_children: !self.outline_items.is_empty(), // Has children if there are other items
+                },
+            );
         }
     }
 
@@ -455,15 +509,32 @@ impl App {
         let current_selection = self.selected_heading_text().map(|s| s.to_string());
 
         if self.search_query.is_empty() {
-            // Reset to full tree
-            self.outline_items = Self::flatten_tree(&self.tree, &self.collapsed_headings);
+            // Reset to full tree with overview entry
+            self.rebuild_outline_items();
         } else {
-            // Filter by search query
+            // Filter by search query, but always include overview entry if applicable
             let query_lower = self.search_query.to_lowercase();
+            let has_preamble = Self::has_preamble_content(&self.document);
+
             self.outline_items = Self::flatten_tree(&self.tree, &self.collapsed_headings)
                 .into_iter()
                 .filter(|item| item.text.to_lowercase().contains(&query_lower))
                 .collect();
+
+            // Add overview entry if it matches the search or if document has preamble
+            if (has_preamble || self.document.headings.is_empty())
+                && DOCUMENT_OVERVIEW.to_lowercase().contains(&query_lower)
+            {
+                self.outline_items.insert(
+                    0,
+                    OutlineItem {
+                        level: 0,
+                        text: DOCUMENT_OVERVIEW.to_string(),
+                        expanded: true,
+                        has_children: !self.tree.is_empty(),
+                    },
+                );
+            }
         }
 
         // Try to restore previous selection, otherwise select first item
@@ -562,8 +633,8 @@ impl App {
                         self.collapsed_headings.insert(heading_text.clone());
                     }
 
-                    // Rebuild the flattened list
-                    self.outline_items = Self::flatten_tree(&self.tree, &self.collapsed_headings);
+                    // Rebuild the flattened list with overview entry
+                    self.rebuild_outline_items();
 
                     // Restore selection by text (not by index)
                     if !self.select_by_text(&heading_text) {
@@ -587,8 +658,8 @@ impl App {
                     // Remove from collapsed set to expand
                     self.collapsed_headings.remove(&heading_text);
 
-                    // Rebuild the flattened list
-                    self.outline_items = Self::flatten_tree(&self.tree, &self.collapsed_headings);
+                    // Rebuild the flattened list with overview entry
+                    self.rebuild_outline_items();
 
                     // Restore selection by text (not by index)
                     if !self.select_by_text(&heading_text) {
@@ -614,9 +685,8 @@ impl App {
                     if self.outline_items[i].has_children {
                         self.collapsed_headings.insert(current_text.clone());
 
-                        // Rebuild the flattened list
-                        self.outline_items =
-                            Self::flatten_tree(&self.tree, &self.collapsed_headings);
+                        // Rebuild the flattened list with overview entry
+                        self.rebuild_outline_items();
 
                         // Restore selection by text
                         if !self.select_by_text(&current_text) {
@@ -642,8 +712,7 @@ impl App {
                             self.collapsed_headings.insert(parent.clone());
 
                             // Rebuild and move selection to parent
-                            self.outline_items =
-                                Self::flatten_tree(&self.tree, &self.collapsed_headings);
+                            self.rebuild_outline_items();
 
                             // Select the parent by text
                             if !self.select_by_text(&parent) {
@@ -1276,9 +1345,9 @@ impl App {
         self.filename = filename;
         self.current_file_path = path;
 
-        // Rebuild tree and outline
+        // Rebuild tree and outline (with overview entry if applicable)
         self.tree = self.document.build_tree();
-        self.outline_items = Self::flatten_tree(&self.tree, &self.collapsed_headings);
+        self.rebuild_outline_items();
 
         // Reset selection to first item
         let mut outline_state = ListState::default();

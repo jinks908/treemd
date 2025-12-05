@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.5] - 2025-12-04
+
+### Added
+
+- **Document overview for headerless files** - Files without a top-level heading now show a "(Document)" entry in the outline ([#25](https://github.com/Epistates/treemd/issues/25))
+  - Displays 📄 icon in outline for the document overview
+  - Shows entire file content including tables and text before the first heading
+  - Automatically added when there's preamble content or no headings at all
+
+### Fixed
+
+- **Screen artifacts when scrolling** - Fixed rendering artifacts caused by tab characters in code blocks ([#26](https://github.com/Epistates/treemd/issues/26))
+  - Tabs are now converted to 4 spaces in code block syntax highlighting
+  - Also applies to raw markdown view for consistency
+
 ## [0.4.4] - 2025-12-04
 
 ### Added
