@@ -5,10 +5,11 @@ mod util;
 
 use layout::{DynamicLayout, Section};
 
-use crate::tui::app::{App, Focus};
+use crate::tui::app::{App, AppMode, Focus};
 use crate::tui::theme::Theme;
 use popups::{
-    render_cell_edit_overlay, render_help_popup, render_link_picker, render_theme_picker,
+    render_cell_edit_overlay, render_file_create_confirm, render_help_popup, render_link_picker,
+    render_theme_picker,
 };
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
@@ -91,6 +92,13 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     if matches!(app.mode, crate::tui::app::AppMode::LinkFollow) && !app.links_in_view.is_empty() {
         render_link_picker(frame, app, area);
     }
+
+    // Render file creation confirmation dialog
+    if matches!(app.mode, AppMode::ConfirmFileCreate) {
+        if let Some(message) = &app.pending_file_create_message {
+            render_file_create_confirm(frame, message, &app.theme);
+        }
+    }
 }
 
 fn render_title_bar(frame: &mut Frame, app: &App, area: Rect) {
@@ -123,6 +131,8 @@ fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_outline(frame: &mut Frame, app: &mut App, area: Rect) {
+    use crate::tui::app::DOCUMENT_OVERVIEW;
+
     let theme = &app.theme;
 
     let items: Vec<ListItem> = app
@@ -130,7 +140,6 @@ fn render_outline(frame: &mut Frame, app: &mut App, area: Rect) {
         .iter()
         .map(|item| {
             let indent = "  ".repeat(item.level.saturating_sub(1));
-            let prefix = "#".repeat(item.level);
 
             // Show expand/collapse indicator if heading has children
             let expand_indicator = if item.has_children {
@@ -149,10 +158,21 @@ fn render_outline(frame: &mut Frame, app: &mut App, area: Rect) {
             // Color headings by level using theme
             let color = theme.heading_color(item.level);
 
-            let text = format!(
-                "{}{}{}{} {}",
-                indent, expand_indicator, bookmark_indicator, prefix, item.text
-            );
+            // Special formatting for document overview (level 0) vs normal headings
+            let text = if item.text == DOCUMENT_OVERVIEW {
+                // Document overview: use 📄 icon instead of # prefix
+                format!(
+                    "{}{}{}📄 {}",
+                    indent, expand_indicator, bookmark_indicator, item.text
+                )
+            } else {
+                // Normal headings: use # prefix
+                let prefix = "#".repeat(item.level);
+                format!(
+                    "{}{}{}{} {}",
+                    indent, expand_indicator, bookmark_indicator, prefix, item.text
+                )
+            };
             let line = Line::from(Span::styled(text, Style::default().fg(color)));
 
             ListItem::new(line)
@@ -426,9 +446,11 @@ fn render_raw_markdown(content: &str, theme: &Theme) -> Text<'static> {
                 format!("{:4} │ ", idx + 1),
                 Style::default().fg(theme.border_unfocused),
             );
+            // Replace tabs with spaces to avoid terminal rendering artifacts
+            let line_content = line.replace('\t', "    ");
             // Raw content with plain text styling
             let content_span =
-                Span::styled(line.to_string(), Style::default().fg(theme.foreground));
+                Span::styled(line_content, Style::default().fg(theme.foreground));
             Line::from(vec![line_num, content_span])
         })
         .collect();

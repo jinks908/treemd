@@ -20,6 +20,10 @@ impl SyntaxHighlighter {
     }
 
     pub fn highlight_code(&self, code: &str, language: &str) -> Vec<Line<'static>> {
+        // Replace tabs with spaces to avoid terminal rendering artifacts during scrolling
+        // Tabs can cause inconsistent display widths across different terminals
+        let code = code.replace('\t', "    ");
+
         let syntax = self
             .syntax_set
             .find_syntax_by_token(language)
@@ -28,7 +32,7 @@ impl SyntaxHighlighter {
         let mut highlighter = HighlightLines::new(syntax, &self.theme);
         let mut lines = Vec::new();
 
-        for line in LinesWithEndings::from(code) {
+        for line in LinesWithEndings::from(&code) {
             let ranges = highlighter
                 .highlight_line(line, &self.syntax_set)
                 .unwrap_or_default();
