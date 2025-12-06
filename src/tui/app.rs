@@ -1135,8 +1135,11 @@ impl App {
                 if has_md_extension {
                     // Explicit markdown extension - load in treemd
                     self.load_file(&path, anchor.as_deref())?;
-                    self.status_message = Some(format!("✓ Opened {}", filename));
-                    self.exit_link_follow_mode();
+                    // Only exit link follow mode if we're not prompting for file creation
+                    if self.mode != AppMode::ConfirmFileCreate {
+                        self.status_message = Some(format!("✓ Opened {}", filename));
+                        self.exit_link_follow_mode();
+                    }
                 } else {
                     // No markdown extension - could be:
                     // 1. A markdown file without extension (common in wikis)
@@ -1147,7 +1150,7 @@ impl App {
                     let absolute_md_path = current_dir.join(&md_path);
 
                     if absolute_md_path.exists() && !absolute_md_path.is_symlink() {
-                        // Found markdown file with .md extension
+                        // Found markdown file with .md extension (exists check passed)
                         self.load_file(&md_path, anchor.as_deref())?;
                         self.status_message = Some(format!("✓ Opened {}.md", filename));
                         self.exit_link_follow_mode();
@@ -1167,9 +1170,12 @@ impl App {
                                 path.clone()
                             };
                             self.load_file(&relative_path, anchor.as_deref())?;
-                            self.status_message =
-                                Some(format!("✓ Opened {}", relative_path.display()));
-                            self.exit_link_follow_mode();
+                            // Only exit link follow mode if we're not prompting for file creation
+                            if self.mode != AppMode::ConfirmFileCreate {
+                                self.status_message =
+                                    Some(format!("✓ Opened {}", relative_path.display()));
+                                self.exit_link_follow_mode();
+                            }
                         }
                     }
                 }
@@ -1178,8 +1184,11 @@ impl App {
             crate::parser::LinkTarget::WikiLink { target, .. } => {
                 // Try to find and load the wikilinked file
                 self.load_wikilink(&target)?;
-                self.status_message = Some(format!("✓ Opened [[{}]]", target));
-                self.exit_link_follow_mode();
+                // Only exit link follow mode if we're not prompting for file creation
+                if self.mode != AppMode::ConfirmFileCreate {
+                    self.status_message = Some(format!("✓ Opened [[{}]]", target));
+                    self.exit_link_follow_mode();
+                }
                 Ok(())
             }
             crate::parser::LinkTarget::External(url) => {
@@ -1852,7 +1861,10 @@ impl App {
                 if has_md_extension {
                     // Explicit markdown extension - load in treemd
                     self.load_file(path, anchor.as_deref())?;
-                    self.exit_interactive_mode();
+                    // Only exit interactive mode if we're not prompting for file creation
+                    if self.mode != AppMode::ConfirmFileCreate {
+                        self.exit_interactive_mode();
+                    }
                 } else {
                     // No markdown extension - could be:
                     // 1. A markdown file without extension (common in wikis)
@@ -1863,7 +1875,7 @@ impl App {
                     let absolute_md_path = current_dir.join(&md_path);
 
                     if absolute_md_path.exists() && !absolute_md_path.is_symlink() {
-                        // Found markdown file with .md extension
+                        // Found markdown file with .md extension (exists check passed)
                         self.load_file(&md_path, anchor.as_deref())?;
                         self.exit_interactive_mode();
                     } else {
@@ -1882,7 +1894,10 @@ impl App {
                                 path.clone()
                             };
                             self.load_file(&relative_path, anchor.as_deref())?;
-                            self.exit_interactive_mode();
+                            // Only exit interactive mode if we're not prompting for file creation
+                            if self.mode != AppMode::ConfirmFileCreate {
+                                self.exit_interactive_mode();
+                            }
                         }
                     }
                 }
@@ -1891,7 +1906,10 @@ impl App {
             LinkTarget::WikiLink { target, .. } => {
                 // Try to find and load the wikilinked file
                 self.load_wikilink(target)?;
-                self.exit_interactive_mode();
+                // Only exit interactive mode if we're not prompting for file creation
+                if self.mode != AppMode::ConfirmFileCreate {
+                    self.exit_interactive_mode();
+                }
                 Ok(())
             }
             LinkTarget::External(url) => {
