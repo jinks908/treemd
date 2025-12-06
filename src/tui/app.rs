@@ -1351,12 +1351,24 @@ impl App {
             .parent()
             .ok_or("Cannot determine current directory")?;
 
-        // Try various extensions
-        let candidates = vec![
-            format!("{}.md", file_target),
-            format!("{}.markdown", file_target),
-            file_target.to_string(),
-        ];
+        // Check if target already has a markdown extension
+        let file_target_lower = file_target.to_lowercase();
+        let has_md_extension = file_target_lower.ends_with(".md")
+            || file_target_lower.ends_with(".markdown")
+            || file_target_lower.ends_with(".mdown");
+
+        // Try various extensions (only add extensions if target doesn't already have one)
+        let candidates: Vec<String> = if has_md_extension {
+            // Already has markdown extension - just try as-is
+            vec![file_target.to_string()]
+        } else {
+            // Try with various extensions
+            vec![
+                format!("{}.md", file_target),
+                format!("{}.markdown", file_target),
+                file_target.to_string(),
+            ]
+        };
 
         for candidate in &candidates {
             let path = current_dir.join(candidate);
@@ -1369,8 +1381,12 @@ impl App {
             }
         }
 
-        // File not found - prompt to create it (default to .md extension)
-        let default_filename = format!("{}.md", file_target);
+        // File not found - prompt to create it (default to .md extension if not already present)
+        let default_filename = if has_md_extension {
+            file_target.to_string()
+        } else {
+            format!("{}.md", file_target)
+        };
         let new_path = current_dir.join(&default_filename);
         self.pending_file_create = Some(new_path);
         self.pending_file_create_message = Some(format!(

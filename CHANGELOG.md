@@ -5,12 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.7] - 2025-12-05
+
+### Fixed
+
+- **File creation modal not appearing** - Fixed issue where following links to non-existent files would say "file opened" but not show the creation prompt
+  - `exit_interactive_mode()` and `exit_link_follow_mode()` were overwriting the `ConfirmFileCreate` mode
+  - Now checks if file creation is pending before resetting mode
+
+- **Double `.md` extension on wikilinks** - Fixed wikilinks like `[[file.md]]` creating `file.md.md`
+  - Now detects if wikilink target already has a markdown extension
+  - Only adds `.md` if not already present
+
 ## [0.4.6] - 2025-12-04
 
-Fixed the non-existing file open modal.
+### Fixed
 
-The issue was that both exit_interactive_mode() and exit_link_follow_mode() unconditionally set self.mode = AppMode::Normal, which was overwriting the ConfirmFileCreate mode set by load_file() or load_wikilink() when a file doesn't exist.
-
+- **File creation modal rendering** - Fixed the file creation confirmation dialog not displaying properly
 
 ## [0.4.5] - 2025-12-04
 
