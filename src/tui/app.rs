@@ -1115,8 +1115,8 @@ impl App {
                 Ok(())
             }
             crate::parser::LinkTarget::RelativeFile { path, anchor } => {
-                // Check if the file is a markdown file
-                let is_markdown = path
+                // Check if the file has a markdown extension
+                let has_md_extension = path
                     .extension()
                     .and_then(|ext| ext.to_str())
                     .map(|ext| {
@@ -1125,31 +1125,70 @@ impl App {
                     })
                     .unwrap_or(false);
 
+                let current_dir = self
+                    .current_file_path
+                    .parent()
+                    .ok_or("Cannot determine current directory")?;
+
                 let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
 
-                if is_markdown {
-                    // Load markdown files in treemd
+                if has_md_extension {
+                    // Explicit markdown extension - load in treemd
                     self.load_file(&path, anchor.as_deref())?;
-                    self.status_message = Some(format!("✓ Opened {}", filename));
-                    self.exit_link_follow_mode();
+                    // Only exit link follow mode if we're not prompting for file creation
+                    if self.mode != AppMode::ConfirmFileCreate {
+                        self.status_message = Some(format!("✓ Opened {}", filename));
+                        self.exit_link_follow_mode();
+                    }
                 } else {
-                    // Open non-markdown files in system editor
-                    let current_dir = self
-                        .current_file_path
-                        .parent()
-                        .ok_or("Cannot determine current directory")?;
-                    let absolute_path = current_dir.join(&path);
+                    // No markdown extension - could be:
+                    // 1. A markdown file without extension (common in wikis)
+                    // 2. A non-markdown file to open in editor
 
-                    self.pending_editor_file = Some(absolute_path);
-                    self.exit_link_follow_mode();
+                    // First, try with .md extension (wiki-style links)
+                    let md_path = PathBuf::from(format!("{}.md", path.display()));
+                    let absolute_md_path = current_dir.join(&md_path);
+
+                    if absolute_md_path.exists() && !absolute_md_path.is_symlink() {
+                        // Found markdown file with .md extension (exists check passed)
+                        self.load_file(&md_path, anchor.as_deref())?;
+                        self.status_message = Some(format!("✓ Opened {}.md", filename));
+                        self.exit_link_follow_mode();
+                    } else {
+                        // Try the path as-is
+                        let absolute_path = current_dir.join(&path);
+
+                        if absolute_path.exists() && !absolute_path.is_symlink() {
+                            // File exists - open in editor (non-markdown)
+                            self.pending_editor_file = Some(absolute_path);
+                            self.exit_link_follow_mode();
+                        } else {
+                            // File doesn't exist - prompt to create markdown file
+                            let relative_path = if path.extension().is_none() {
+                                PathBuf::from(format!("{}.md", path.display()))
+                            } else {
+                                path.clone()
+                            };
+                            self.load_file(&relative_path, anchor.as_deref())?;
+                            // Only exit link follow mode if we're not prompting for file creation
+                            if self.mode != AppMode::ConfirmFileCreate {
+                                self.status_message =
+                                    Some(format!("✓ Opened {}", relative_path.display()));
+                                self.exit_link_follow_mode();
+                            }
+                        }
+                    }
                 }
                 Ok(())
             }
             crate::parser::LinkTarget::WikiLink { target, .. } => {
                 // Try to find and load the wikilinked file
                 self.load_wikilink(&target)?;
-                self.status_message = Some(format!("✓ Opened [[{}]]", target));
-                self.exit_link_follow_mode();
+                // Only exit link follow mode if we're not prompting for file creation
+                if self.mode != AppMode::ConfirmFileCreate {
+                    self.status_message = Some(format!("✓ Opened [[{}]]", target));
+                    self.exit_link_follow_mode();
+                }
                 Ok(())
             }
             crate::parser::LinkTarget::External(url) => {
@@ -1273,17 +1312,36 @@ impl App {
 
     /// Find and load a wikilinked file
     ///
+    /// Supports formats:
+    /// - `[[filename]]` - load file (tries .md, .markdown extensions)
+    /// - `[[filename#anchor]]` - load file and jump to anchor
+    /// - `[[#anchor]]` - jump to anchor in current document
+    ///
     /// Security: WikiLinks must be simple filenames without path separators
     /// to prevent directory traversal attacks.
     fn load_wikilink(&mut self, target: &str) -> Result<(), String> {
+        // Handle anchor-only wikilinks (e.g., [[#section]])
+        if let Some(anchor) = target.strip_prefix('#') {
+            // Jump to heading in current document
+            self.select_by_text(anchor);
+            return Ok(());
+        }
+
+        // Split target into file and optional anchor (e.g., "file#section" -> ("file", Some("section")))
+        let (file_target, anchor) = if let Some((file, anchor)) = target.split_once('#') {
+            (file, Some(anchor))
+        } else {
+            (target, None)
+        };
+
         // Security: Reject wikilinks containing path separators or traversal
-        if target.contains('/') || target.contains('\\') || target.contains("..") {
+        if file_target.contains('/') || file_target.contains('\\') || file_target.contains("..") {
             return Err("WikiLinks cannot contain path separators".to_string());
         }
 
         // Security: Reject absolute paths (Windows drive letters)
         #[cfg(windows)]
-        if target.len() >= 2 && target.chars().nth(1) == Some(':') {
+        if file_target.len() >= 2 && file_target.chars().nth(1) == Some(':') {
             return Err("WikiLinks cannot be absolute paths".to_string());
         }
 
@@ -1293,12 +1351,24 @@ impl App {
             .parent()
             .ok_or("Cannot determine current directory")?;
 
-        // Try various extensions
-        let candidates = vec![
-            format!("{}.md", target),
-            format!("{}.markdown", target),
-            target.to_string(),
-        ];
+        // Check if target already has a markdown extension
+        let file_target_lower = file_target.to_lowercase();
+        let has_md_extension = file_target_lower.ends_with(".md")
+            || file_target_lower.ends_with(".markdown")
+            || file_target_lower.ends_with(".mdown");
+
+        // Try various extensions (only add extensions if target doesn't already have one)
+        let candidates: Vec<String> = if has_md_extension {
+            // Already has markdown extension - just try as-is
+            vec![file_target.to_string()]
+        } else {
+            // Try with various extensions
+            vec![
+                format!("{}.md", file_target),
+                format!("{}.markdown", file_target),
+                file_target.to_string(),
+            ]
+        };
 
         for candidate in &candidates {
             let path = current_dir.join(candidate);
@@ -1307,12 +1377,16 @@ impl App {
                 continue; // Skip symlinks for security
             }
             if path.exists() {
-                return self.load_file(&PathBuf::from(candidate), None);
+                return self.load_file(&PathBuf::from(candidate), anchor);
             }
         }
 
-        // File not found - prompt to create it (default to .md extension)
-        let default_filename = format!("{}.md", target);
+        // File not found - prompt to create it (default to .md extension if not already present)
+        let default_filename = if has_md_extension {
+            file_target.to_string()
+        } else {
+            format!("{}.md", file_target)
+        };
         let new_path = current_dir.join(&default_filename);
         self.pending_file_create = Some(new_path);
         self.pending_file_create_message = Some(format!(
@@ -1484,8 +1558,8 @@ impl App {
         use crate::parser::content::parse_content;
         let blocks = parse_content(&content, 0);
 
-        // Index interactive elements (pass raw content for wikilink extraction)
-        self.interactive_state.index_elements(&blocks, &content);
+        // Index interactive elements
+        self.interactive_state.index_elements(&blocks);
 
         // Enter interactive mode at current scroll position (preserve user's view)
         self.interactive_state
@@ -1635,7 +1709,7 @@ impl App {
 
         use crate::parser::content::parse_content;
         let blocks = parse_content(&content, 0);
-        self.interactive_state.index_elements(&blocks, &content);
+        self.interactive_state.index_elements(&blocks);
     }
 
     /// Toggle a checkbox and save changes to the file
@@ -1785,8 +1859,8 @@ impl App {
                 Ok(())
             }
             LinkTarget::RelativeFile { path, anchor } => {
-                // Check if the file is a markdown file
-                let is_markdown = path
+                // Check if the file has a markdown extension
+                let has_md_extension = path
                     .extension()
                     .and_then(|ext| ext.to_str())
                     .map(|ext| {
@@ -1795,28 +1869,63 @@ impl App {
                     })
                     .unwrap_or(false);
 
-                if is_markdown {
-                    // Load markdown files in treemd
-                    self.load_file(path, anchor.as_deref())?;
-                    self.exit_interactive_mode();
-                } else {
-                    // Open non-markdown files in system editor
-                    // Resolve path relative to current file
-                    let current_dir = self
-                        .current_file_path
-                        .parent()
-                        .ok_or("Cannot determine current directory")?;
-                    let absolute_path = current_dir.join(path);
+                let current_dir = self
+                    .current_file_path
+                    .parent()
+                    .ok_or("Cannot determine current directory")?;
 
-                    self.pending_editor_file = Some(absolute_path);
-                    self.exit_interactive_mode();
+                if has_md_extension {
+                    // Explicit markdown extension - load in treemd
+                    self.load_file(path, anchor.as_deref())?;
+                    // Only exit interactive mode if we're not prompting for file creation
+                    if self.mode != AppMode::ConfirmFileCreate {
+                        self.exit_interactive_mode();
+                    }
+                } else {
+                    // No markdown extension - could be:
+                    // 1. A markdown file without extension (common in wikis)
+                    // 2. A non-markdown file to open in editor
+
+                    // First, try with .md extension (wiki-style links)
+                    let md_path = PathBuf::from(format!("{}.md", path.display()));
+                    let absolute_md_path = current_dir.join(&md_path);
+
+                    if absolute_md_path.exists() && !absolute_md_path.is_symlink() {
+                        // Found markdown file with .md extension (exists check passed)
+                        self.load_file(&md_path, anchor.as_deref())?;
+                        self.exit_interactive_mode();
+                    } else {
+                        // Try the path as-is
+                        let absolute_path = current_dir.join(path);
+
+                        if absolute_path.exists() && !absolute_path.is_symlink() {
+                            // File exists - open in editor (non-markdown)
+                            self.pending_editor_file = Some(absolute_path);
+                            self.exit_interactive_mode();
+                        } else {
+                            // File doesn't exist - prompt to create markdown file
+                            let relative_path = if path.extension().is_none() {
+                                PathBuf::from(format!("{}.md", path.display()))
+                            } else {
+                                path.clone()
+                            };
+                            self.load_file(&relative_path, anchor.as_deref())?;
+                            // Only exit interactive mode if we're not prompting for file creation
+                            if self.mode != AppMode::ConfirmFileCreate {
+                                self.exit_interactive_mode();
+                            }
+                        }
+                    }
                 }
                 Ok(())
             }
             LinkTarget::WikiLink { target, .. } => {
                 // Try to find and load the wikilinked file
                 self.load_wikilink(target)?;
-                self.exit_interactive_mode();
+                // Only exit interactive mode if we're not prompting for file creation
+                if self.mode != AppMode::ConfirmFileCreate {
+                    self.exit_interactive_mode();
+                }
                 Ok(())
             }
             LinkTarget::External(url) => {
