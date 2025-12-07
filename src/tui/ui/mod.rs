@@ -31,9 +31,11 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
 
     // Create dynamic main layout
+    // Show search bar if: outline search is active OR in document search mode (typing or viewing results)
+    let show_search_bar = app.show_search || app.mode == AppMode::DocSearch;
     let main_layout = DynamicLayout::vertical(area)
         .section(Section::Title, Constraint::Length(2))
-        .section_if(app.show_search, Section::Search, Constraint::Length(3))
+        .section_if(show_search_bar, Section::Search, Constraint::Length(3))
         .section(Section::Content, Constraint::Min(0))
         .section(Section::Status, Constraint::Length(1))
         .build();
@@ -126,18 +128,83 @@ fn render_title_bar(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_search_bar(frame: &mut Frame, app: &App, area: Rect) {
-    let search_text = format!("Search: {}_", app.search_query);
-    let paragraph = Paragraph::new(search_text)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Yellow))
-                .title(" Filter Headings ")
-                .style(Style::default().bg(Color::Rgb(30, 30, 50))),
-        )
-        .style(Style::default().fg(Color::White));
+    // Check if we're in document search mode
+    if app.mode == AppMode::DocSearch {
+        let match_info = if !app.doc_search_matches.is_empty() {
+            let current = app.doc_search_current_idx.unwrap_or(0) + 1;
+            let total = app.doc_search_matches.len();
+            format!(" [{}/{}]", current, total)
+        } else if !app.doc_search_query.is_empty() {
+            " [no matches]".to_string()
+        } else {
+            String::new()
+        };
 
-    frame.render_widget(paragraph, area);
+        // Build search bar with query and hints
+        let mut line_spans = vec![
+            Span::raw("Find: "),
+            Span::styled(
+                if app.doc_search_active {
+                    format!("{}_", app.doc_search_query)
+                } else {
+                    app.doc_search_query.clone()
+                },
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(match_info),
+        ];
+
+        // Add hint text on the right side
+        let hint = if app.doc_search_active {
+            "  (Esc: exit, Ctrl+U: clear, n/N: next/prev)"
+        } else {
+            "  (Esc: exit, /: edit, Ctrl+U: clear, n/N: nav)"
+        };
+        line_spans.push(Span::styled(
+            hint.to_string(),
+            Style::default().fg(Color::DarkGray),
+        ));
+
+        let paragraph = Paragraph::new(Line::from(line_spans))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan))
+                    .title(" Document Search ")
+                    .style(Style::default().bg(Color::Rgb(30, 30, 50))),
+            )
+            .style(Style::default().fg(Color::White));
+
+        frame.render_widget(paragraph, area);
+    } else {
+        // Outline/heading search
+        let mut line_spans = vec![
+            Span::raw("Search: "),
+            Span::styled(
+                format!("{}_", app.search_query),
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            ),
+        ];
+
+        // Add hint text on the right side
+        let hint = "  (Esc: exit, Ctrl+U: clear)";
+        line_spans.push(Span::styled(
+            hint.to_string(),
+            Style::default().fg(Color::DarkGray),
+        ));
+
+        let paragraph = Paragraph::new(Line::from(line_spans))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Yellow))
+                    .title(" Filter Headings ")
+                    .style(Style::default().bg(Color::Rgb(30, 30, 50))),
+            )
+            .style(Style::default().fg(Color::White));
+
+        frame.render_widget(paragraph, area);
+    }
 }
 
 fn render_outline(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -262,7 +329,7 @@ fn render_content(frame: &mut Frame, app: &App, area: Rect) {
     };
 
     // Check if we should render raw source or enhanced markdown
-    let rendered_text = if app.show_raw_source {
+    let mut rendered_text = if app.show_raw_source {
         // Raw source view - show unprocessed markdown
         render_raw_markdown(&content_text, theme)
     } else {
@@ -285,6 +352,16 @@ fn render_content(frame: &mut Frame, app: &App, area: Rect) {
             interactive_state_ref,
         )
     };
+
+    // Apply search highlighting if document search is active and we have a query
+    if app.mode == AppMode::DocSearch && !app.doc_search_query.is_empty() {
+        rendered_text = apply_search_highlighting(
+            rendered_text,
+            &app.doc_search_query,
+            app.doc_search_current_idx,
+            app.doc_search_matches.len(),
+        );
+    }
 
     let paragraph = Paragraph::new(rendered_text)
         .block(
@@ -901,6 +978,91 @@ fn render_markdown_enhanced(
     }
 
     Text::from(lines)
+}
+
+/// Apply search highlighting to rendered text by searching each line for the query
+fn apply_search_highlighting(
+    text: Text<'static>,
+    query: &str,
+    current_match_idx: Option<usize>,
+    total_matches: usize,
+) -> Text<'static> {
+    if query.is_empty() {
+        return text;
+    }
+
+    let query_lower = query.to_lowercase();
+    let query_len = query.len();
+    let mut new_lines = Vec::new();
+    let mut match_counter = 0usize;
+
+    for line in text.lines.into_iter() {
+        // Join all spans to get the full line text
+        let full_text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        let full_text_lower = full_text.to_lowercase();
+
+        // Find all occurrences of the query in this line (non-overlapping)
+        let mut matches_in_line: Vec<(usize, usize)> = Vec::new();
+        let mut search_start = 0;
+
+        while let Some(rel_pos) = full_text_lower[search_start..].find(&query_lower) {
+            let byte_start = search_start + rel_pos;
+            let byte_end = byte_start + query_len;
+
+            // Verify we're on valid char boundaries
+            if full_text.is_char_boundary(byte_start) && full_text.is_char_boundary(byte_end) {
+                matches_in_line.push((byte_start, byte_end));
+            }
+
+            search_start = byte_end; // Move past this match
+            if search_start >= full_text_lower.len() {
+                break;
+            }
+        }
+
+        if matches_in_line.is_empty() {
+            // No matches in this line - keep original
+            new_lines.push(line);
+        } else {
+            // Rebuild line with highlighted matches
+            let mut new_spans: Vec<Span<'static>> = Vec::new();
+            let mut pos = 0;
+
+            for (start, end) in matches_in_line {
+                let is_current = total_matches > 0 && current_match_idx == Some(match_counter);
+
+                // Add text before highlight
+                if pos < start {
+                    new_spans.push(Span::raw(full_text[pos..start].to_string()));
+                }
+
+                // Add highlighted text
+                let highlight_style = if is_current {
+                    Style::default()
+                        .bg(Color::Yellow)
+                        .fg(Color::Black)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                        .bg(Color::Rgb(100, 100, 0))
+                        .fg(Color::White)
+                };
+                new_spans.push(Span::styled(full_text[start..end].to_string(), highlight_style));
+
+                pos = end;
+                match_counter += 1;
+            }
+
+            // Add remaining text after last match
+            if pos < full_text.len() {
+                new_spans.push(Span::raw(full_text[pos..].to_string()));
+            }
+
+            new_lines.push(Line::from(new_spans));
+        }
+    }
+
+    Text::from(new_lines)
 }
 
 fn render_block_to_lines(
