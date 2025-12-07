@@ -708,7 +708,7 @@ impl App {
         self.filter_outline();
     }
 
-    fn filter_outline(&mut self) {
+    pub fn filter_outline(&mut self) {
         // Save current selection text
         let current_selection = self.selected_heading_text().map(|s| s.to_string());
 
@@ -790,8 +790,8 @@ impl App {
         self.update_doc_search_matches();
     }
 
-    /// Update search matches based on current query
-    fn update_doc_search_matches(&mut self) {
+    /// Update search matches based on current query (supports fuzzy and exact matching)
+    pub fn update_doc_search_matches(&mut self) {
         self.doc_search_matches.clear();
 
         if self.doc_search_query.is_empty() {
@@ -809,22 +809,51 @@ impl App {
         };
 
         let query = self.doc_search_query.to_lowercase();
+        let query_chars: Vec<char> = query.chars().collect();
 
-        // Find all matches (case-insensitive)
+        // Find all matches: prioritize exact substring matches, then fuzzy matches
         for (line_num, line) in content.lines().enumerate() {
             let line_lower = line.to_lowercase();
-            let mut search_start = 0;
 
+            // First pass: exact substring matches (highest priority)
+            let mut search_start = 0;
             while let Some(pos) = line_lower[search_start..].find(&query) {
                 let col_start = search_start + pos;
-
                 self.doc_search_matches.push(SearchMatch {
                     line: line_num,
                     col_start,
                     len: query.len(),
                 });
+                search_start = col_start + query.len(); // Move past exact match
+            }
 
-                search_start = col_start + 1; // Move past this match to find overlapping matches
+            // Second pass: fuzzy matches if query is 3+ chars (to reduce noise)
+            // Fuzzy matching: all query chars must appear in order, but not necessarily contiguous
+            if query.len() >= 3 && self.doc_search_matches.iter().all(|m| m.line != line_num) {
+                let mut line_chars = line_lower.chars().enumerate().peekable();
+                let mut matched_positions = Vec::new();
+                let mut query_idx = 0;
+
+                while let Some((pos, ch)) = line_chars.next() {
+                    if query_idx < query_chars.len() && ch == query_chars[query_idx] {
+                        matched_positions.push(pos);
+                        query_idx += 1;
+                    }
+                }
+
+                // If all query chars found in order, record it as a fuzzy match
+                if query_idx == query_chars.len() && !matched_positions.is_empty() {
+                    if let Some(&first_pos) = matched_positions.first() {
+                        if let Some(&last_pos) = matched_positions.last() {
+                            let match_len = (last_pos - first_pos) + 1;
+                            self.doc_search_matches.push(SearchMatch {
+                                line: line_num,
+                                col_start: first_pos,
+                                len: match_len,
+                            });
+                        }
+                    }
+                }
             }
         }
 
