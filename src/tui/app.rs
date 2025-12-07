@@ -29,6 +29,172 @@ pub enum AppMode {
     Help,
     CellEdit,
     ConfirmFileCreate,
+    DocSearch,        // In-document search mode (n/N navigation)
+    CommandPalette,   // Fuzzy-searchable command palette
+    ConfirmSaveWidth, // Modal confirmation for saving outline width
+}
+
+/// Available commands in the command palette
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CommandAction {
+    SaveWidth,
+    ToggleOutline,
+    ToggleHelp,
+    ToggleRawSource,
+    JumpToTop,
+    JumpToBottom,
+    Quit,
+}
+
+/// A command in the palette
+#[derive(Debug, Clone)]
+pub struct PaletteCommand {
+    pub name: &'static str,
+    pub aliases: &'static [&'static str],
+    pub description: &'static str,
+    pub action: CommandAction,
+}
+
+impl PaletteCommand {
+    const fn new(
+        name: &'static str,
+        aliases: &'static [&'static str],
+        description: &'static str,
+        action: CommandAction,
+    ) -> Self {
+        Self {
+            name,
+            aliases,
+            description,
+            action,
+        }
+    }
+
+    /// Check if query matches this command (fuzzy match on name or aliases)
+    pub fn matches(&self, query: &str) -> bool {
+        if query.is_empty() {
+            return true;
+        }
+        let query_lower = query.to_lowercase();
+
+        // Check name
+        if self.name.to_lowercase().contains(&query_lower) {
+            return true;
+        }
+
+        // Check aliases
+        for alias in self.aliases {
+            if alias.to_lowercase().starts_with(&query_lower) {
+                return true;
+            }
+        }
+
+        // Fuzzy match: check if all query chars appear in order in name
+        let name_lower = self.name.to_lowercase();
+        let mut name_chars = name_lower.chars().peekable();
+        for qc in query_lower.chars() {
+            loop {
+                match name_chars.next() {
+                    Some(nc) if nc == qc => break,
+                    Some(_) => continue,
+                    None => return false,
+                }
+            }
+        }
+        true
+    }
+
+    /// Calculate match score (higher = better match)
+    pub fn match_score(&self, query: &str) -> usize {
+        if query.is_empty() {
+            return 100;
+        }
+        let query_lower = query.to_lowercase();
+
+        // Exact alias match = highest score
+        for alias in self.aliases {
+            if alias.to_lowercase() == query_lower {
+                return 1000;
+            }
+        }
+
+        // Alias prefix match
+        for alias in self.aliases {
+            if alias.to_lowercase().starts_with(&query_lower) {
+                return 500;
+            }
+        }
+
+        // Name starts with query
+        if self.name.to_lowercase().starts_with(&query_lower) {
+            return 300;
+        }
+
+        // Name contains query
+        if self.name.to_lowercase().contains(&query_lower) {
+            return 200;
+        }
+
+        // Fuzzy match score based on how compact the match is
+        100
+    }
+}
+
+/// All available commands
+pub const PALETTE_COMMANDS: &[PaletteCommand] = &[
+    PaletteCommand::new(
+        "Save width to config",
+        &["w", "write", "save"],
+        "Save current outline width to config file",
+        CommandAction::SaveWidth,
+    ),
+    PaletteCommand::new(
+        "Toggle outline",
+        &["outline", "sidebar"],
+        "Show/hide the outline sidebar",
+        CommandAction::ToggleOutline,
+    ),
+    PaletteCommand::new(
+        "Toggle help",
+        &["help", "?"],
+        "Show/hide keyboard shortcuts",
+        CommandAction::ToggleHelp,
+    ),
+    PaletteCommand::new(
+        "Toggle raw source",
+        &["raw", "source"],
+        "Switch between rendered and raw markdown",
+        CommandAction::ToggleRawSource,
+    ),
+    PaletteCommand::new(
+        "Jump to top",
+        &["top", "first", "gg"],
+        "Go to first heading",
+        CommandAction::JumpToTop,
+    ),
+    PaletteCommand::new(
+        "Jump to bottom",
+        &["bottom", "last", "G"],
+        "Go to last heading",
+        CommandAction::JumpToBottom,
+    ),
+    PaletteCommand::new(
+        "Quit",
+        &["q", "quit", "exit"],
+        "Exit treemd",
+        CommandAction::Quit,
+    ),
+];
+
+/// A match found during document search
+#[derive(Debug, Clone)]
+pub struct SearchMatch {
+    /// Line number (0-indexed)
+    pub line: usize,
+    /// Start column (byte offset in line)
+    pub col_start: usize,
+    /// Length of match in bytes
+    pub len: usize,
 }
 
 pub struct App {
@@ -49,6 +215,10 @@ pub struct App {
     pub highlighter: SyntaxHighlighter,
     pub show_outline: bool,
     pub outline_width: u16,                // Percentage: 20, 30, or 40
+    /// Whether the config file had a custom (non-standard) outline width at startup.
+    /// Used to protect power users' custom config values from being overwritten.
+    /// Standard values are 20, 30, 40; anything else is considered custom.
+    config_has_custom_outline_width: bool,
     pub bookmark_position: Option<String>, // Bookmarked heading text (was: outline position)
     collapsed_headings: HashSet<String>,   // Track which headings are collapsed by text
     pub current_theme: ThemeName,
@@ -95,6 +265,17 @@ pub struct App {
     // Pending file creation (for confirm dialog)
     pub pending_file_create: Option<PathBuf>,
     pub pending_file_create_message: Option<String>,
+
+    // Document search state (for in-document / search with n/N navigation)
+    pub doc_search_query: String,
+    pub doc_search_matches: Vec<SearchMatch>,
+    pub doc_search_current_idx: Option<usize>,
+    pub doc_search_active: bool, // Whether search input is active
+
+    // Command palette state
+    pub command_query: String,
+    pub command_filtered: Vec<usize>, // Indices into PALETTE_COMMANDS
+    pub command_selected: usize,
 }
 
 /// Saved state for file navigation history
@@ -158,6 +339,11 @@ impl App {
         // Load outline width from config
         let outline_width = config.ui.outline_width;
 
+        // Detect if config has a custom (non-standard) outline width
+        // Standard values: 20, 30, 40 - anything else is a custom power-user setting
+        let config_has_custom_outline_width =
+            outline_width != 20 && outline_width != 30 && outline_width != 40;
+
         Self {
             document,
             filename,
@@ -176,6 +362,7 @@ impl App {
             highlighter: SyntaxHighlighter::new(),
             show_outline: true,
             outline_width,
+            config_has_custom_outline_width,
             bookmark_position: None,
             collapsed_headings,
             current_theme,
@@ -221,6 +408,17 @@ impl App {
             // Pending file creation (for confirm dialog)
             pending_file_create: None,
             pending_file_create_message: None,
+
+            // Document search state
+            doc_search_query: String::new(),
+            doc_search_matches: Vec::new(),
+            doc_search_current_idx: None,
+            doc_search_active: false,
+
+            // Command palette state
+            command_query: String::new(),
+            command_filtered: (0..PALETTE_COMMANDS.len()).collect(),
+            command_selected: 0,
         }
     }
 
@@ -553,6 +751,174 @@ impl App {
         }
     }
 
+    // ========== Document Search Methods ==========
+
+    /// Enter document search mode (activated by / when content is focused)
+    pub fn enter_doc_search(&mut self) {
+        self.mode = AppMode::DocSearch;
+        self.doc_search_active = true;
+        self.doc_search_query.clear();
+        self.doc_search_matches.clear();
+        self.doc_search_current_idx = None;
+    }
+
+    /// Add a character to the document search query
+    pub fn doc_search_input(&mut self, c: char) {
+        // Limit search query length
+        if self.doc_search_query.len() >= Self::MAX_SEARCH_LEN {
+            return;
+        }
+        // Filter control characters
+        if c.is_control() && c != '\t' {
+            return;
+        }
+        self.doc_search_query.push(c);
+        self.update_doc_search_matches();
+    }
+
+    /// Remove the last character from the document search query
+    pub fn doc_search_backspace(&mut self) {
+        self.doc_search_query.pop();
+        self.update_doc_search_matches();
+    }
+
+    /// Update search matches based on current query
+    fn update_doc_search_matches(&mut self) {
+        self.doc_search_matches.clear();
+
+        if self.doc_search_query.is_empty() {
+            self.doc_search_current_idx = None;
+            return;
+        }
+
+        // Get current section content
+        let content = if let Some(heading_text) = self.selected_heading_text() {
+            self.document
+                .extract_section(heading_text)
+                .unwrap_or_else(|| self.document.content.clone())
+        } else {
+            self.document.content.clone()
+        };
+
+        let query = self.doc_search_query.to_lowercase();
+
+        // Find all matches (case-insensitive)
+        for (line_num, line) in content.lines().enumerate() {
+            let line_lower = line.to_lowercase();
+            let mut search_start = 0;
+
+            while let Some(pos) = line_lower[search_start..].find(&query) {
+                let col_start = search_start + pos;
+
+                self.doc_search_matches.push(SearchMatch {
+                    line: line_num,
+                    col_start,
+                    len: query.len(),
+                });
+
+                search_start = col_start + 1; // Move past this match to find overlapping matches
+            }
+        }
+
+        // Select first match if any exist
+        self.doc_search_current_idx = if self.doc_search_matches.is_empty() {
+            None
+        } else {
+            Some(0)
+        };
+
+        // Scroll to current match
+        self.scroll_to_doc_search_match();
+    }
+
+    /// Scroll to the current search match
+    fn scroll_to_doc_search_match(&mut self) {
+        if let Some(idx) = self.doc_search_current_idx {
+            if let Some(m) = self.doc_search_matches.get(idx) {
+                let match_line = m.line as u16;
+
+                // Scroll to bring match line into view (center it if possible)
+                let half_viewport = 10u16; // Approximate half viewport
+                self.content_scroll = match_line.saturating_sub(half_viewport);
+                self.content_scroll = self.content_scroll.min(self.content_height.saturating_sub(1));
+                self.content_scroll_state = self
+                    .content_scroll_state
+                    .position(self.content_scroll as usize);
+            }
+        }
+    }
+
+    /// Accept search and exit search input mode (keep matches for n/N navigation)
+    pub fn accept_doc_search(&mut self) {
+        self.doc_search_active = false;
+        // Keep mode as DocSearch for n/N navigation
+        // If no matches, show status message
+        if self.doc_search_matches.is_empty() && !self.doc_search_query.is_empty() {
+            self.status_message = Some(format!("Pattern not found: {}", self.doc_search_query));
+        }
+    }
+
+    /// Cancel search and return to normal mode
+    pub fn cancel_doc_search(&mut self) {
+        self.mode = AppMode::Normal;
+        self.doc_search_active = false;
+        self.doc_search_query.clear();
+        self.doc_search_matches.clear();
+        self.doc_search_current_idx = None;
+    }
+
+    /// Clear search highlighting and return to normal mode
+    pub fn clear_doc_search(&mut self) {
+        self.mode = AppMode::Normal;
+        self.doc_search_query.clear();
+        self.doc_search_matches.clear();
+        self.doc_search_current_idx = None;
+    }
+
+    /// Navigate to next search match
+    pub fn next_doc_match(&mut self) {
+        if self.doc_search_matches.is_empty() {
+            return;
+        }
+
+        self.doc_search_current_idx = Some(match self.doc_search_current_idx {
+            Some(idx) => (idx + 1) % self.doc_search_matches.len(),
+            None => 0,
+        });
+
+        self.scroll_to_doc_search_match();
+    }
+
+    /// Navigate to previous search match
+    pub fn prev_doc_match(&mut self) {
+        if self.doc_search_matches.is_empty() {
+            return;
+        }
+
+        let len = self.doc_search_matches.len();
+        self.doc_search_current_idx = Some(match self.doc_search_current_idx {
+            Some(idx) => (idx + len - 1) % len,
+            None => len - 1,
+        });
+
+        self.scroll_to_doc_search_match();
+    }
+
+    /// Get document search status text for status bar
+    pub fn doc_search_status(&self) -> String {
+        if self.doc_search_matches.is_empty() {
+            if self.doc_search_query.is_empty() {
+                "Search: ".to_string()
+            } else {
+                format!("Search: {} (no matches)", self.doc_search_query)
+            }
+        } else {
+            let current = self.doc_search_current_idx.unwrap_or(0) + 1;
+            let total = self.doc_search_matches.len();
+            format!("Search: {} ({}/{})", self.doc_search_query, current, total)
+        }
+    }
+
     pub fn scroll_page_down(&mut self) {
         if self.focus == Focus::Content {
             let new_scroll = self.content_scroll.saturating_add(10);
@@ -751,23 +1117,216 @@ impl App {
         }
     }
 
+    /// Cycle outline width between 20%, 30%, and 40%.
+    ///
+    /// Behavior depends on user's config:
+    /// - **New users** (default or standard width in config): Changes are persisted
+    ///   to config file for a seamless experience.
+    /// - **Power users** (custom width like 25% in config): Changes are session-only
+    ///   to protect their carefully crafted config from accidental overwrites.
+    ///   They can explicitly save with `S` key.
+    ///
+    /// This respects the principle that user config should always take precedence.
     pub fn cycle_outline_width(&mut self, increase: bool) {
         if increase {
             self.outline_width = match self.outline_width {
                 20 => 30,
                 30 => 40,
-                _ => 40,
+                40 => 20, // Wrap around
+                // For custom widths, snap to nearest standard value going up
+                w if w < 25 => 30,
+                w if w < 35 => 40,
+                _ => 20,
             };
         } else {
             self.outline_width = match self.outline_width {
                 40 => 30,
                 30 => 20,
-                _ => 20,
+                20 => 40, // Wrap around
+                // For custom widths, snap to nearest standard value going down
+                w if w > 35 => 30,
+                w if w > 25 => 20,
+                _ => 40,
             };
         }
 
-        // Save to config (silently ignore errors)
-        let _ = self.config.set_outline_width(self.outline_width);
+        // Decide whether to persist based on user's config type
+        if self.config_has_custom_outline_width {
+            // Power user: protect their custom config value, offer explicit save
+            self.set_status_message(&format!(
+                "Width: {}% | S or :w to save",
+                self.outline_width
+            ));
+        } else {
+            // New user or standard config: safe to persist for better UX
+            let _ = self.config.set_outline_width(self.outline_width);
+            self.set_status_message(&format!("Width: {}%", self.outline_width));
+        }
+    }
+
+    /// Show confirmation modal for saving outline width.
+    /// Called when user presses `S`.
+    pub fn show_save_width_confirmation(&mut self) {
+        self.mode = AppMode::ConfirmSaveWidth;
+    }
+
+    /// Confirm and save outline width to config file.
+    pub fn confirm_save_outline_width(&mut self) {
+        match self.config.set_outline_width(self.outline_width) {
+            Ok(_) => {
+                // Update the flag since user explicitly chose to save
+                self.config_has_custom_outline_width =
+                    self.outline_width != 20 && self.outline_width != 30 && self.outline_width != 40;
+                self.set_status_message(&format!(
+                    "✓ Width {}% saved to config",
+                    self.outline_width
+                ));
+            }
+            Err(e) => {
+                self.set_status_message(&format!("✗ Failed to save: {}", e));
+            }
+        }
+        self.mode = AppMode::Normal;
+    }
+
+    /// Cancel the save width confirmation modal.
+    pub fn cancel_save_width_confirmation(&mut self) {
+        self.mode = AppMode::Normal;
+        self.set_status_message("Save cancelled");
+    }
+
+    // ========== Command Palette ==========
+
+    /// Open command palette (triggered by `:`)
+    pub fn open_command_palette(&mut self) {
+        self.mode = AppMode::CommandPalette;
+        self.command_query.clear();
+        self.command_filtered = (0..PALETTE_COMMANDS.len()).collect();
+        self.command_selected = 0;
+    }
+
+    /// Add a character to command palette search
+    pub fn command_palette_input(&mut self, c: char) {
+        if self.command_query.len() < 32 {
+            self.command_query.push(c);
+            self.filter_commands();
+        }
+    }
+
+    /// Remove last character from command palette search
+    pub fn command_palette_backspace(&mut self) {
+        self.command_query.pop();
+        self.filter_commands();
+    }
+
+    /// Filter commands based on current query
+    fn filter_commands(&mut self) {
+        // Filter matching commands
+        let mut matches: Vec<(usize, usize)> = PALETTE_COMMANDS
+            .iter()
+            .enumerate()
+            .filter(|(_, cmd)| cmd.matches(&self.command_query))
+            .map(|(idx, cmd)| (idx, cmd.match_score(&self.command_query)))
+            .collect();
+
+        // Sort by score (highest first)
+        matches.sort_by(|a, b| b.1.cmp(&a.1));
+
+        self.command_filtered = matches.into_iter().map(|(idx, _)| idx).collect();
+
+        // Reset selection if it's out of bounds
+        if self.command_selected >= self.command_filtered.len() {
+            self.command_selected = 0;
+        }
+    }
+
+    /// Move selection down in command palette
+    pub fn command_palette_next(&mut self) {
+        if !self.command_filtered.is_empty() {
+            self.command_selected = (self.command_selected + 1) % self.command_filtered.len();
+        }
+    }
+
+    /// Move selection up in command palette
+    pub fn command_palette_prev(&mut self) {
+        if !self.command_filtered.is_empty() {
+            self.command_selected = if self.command_selected == 0 {
+                self.command_filtered.len() - 1
+            } else {
+                self.command_selected - 1
+            };
+        }
+    }
+
+    /// Close command palette without executing
+    pub fn close_command_palette(&mut self) {
+        self.mode = AppMode::Normal;
+        self.command_query.clear();
+    }
+
+    /// Execute selected command and return whether to quit
+    pub fn execute_selected_command(&mut self) -> bool {
+        let should_quit = if let Some(&cmd_idx) = self.command_filtered.get(self.command_selected) {
+            let action = PALETTE_COMMANDS[cmd_idx].action;
+            self.mode = AppMode::Normal;
+            self.command_query.clear();
+            self.execute_command_action(action)
+        } else {
+            self.mode = AppMode::Normal;
+            false
+        };
+        should_quit
+    }
+
+    /// Execute a command action, returns true if should quit
+    fn execute_command_action(&mut self, action: CommandAction) -> bool {
+        match action {
+            CommandAction::SaveWidth => {
+                match self.config.set_outline_width(self.outline_width) {
+                    Ok(_) => {
+                        self.config_has_custom_outline_width = self.outline_width != 20
+                            && self.outline_width != 30
+                            && self.outline_width != 40;
+                        self.set_status_message(&format!(
+                            "✓ Width {}% saved to config",
+                            self.outline_width
+                        ));
+                    }
+                    Err(e) => {
+                        self.set_status_message(&format!("✗ Failed to save: {}", e));
+                    }
+                }
+                false
+            }
+            CommandAction::ToggleOutline => {
+                self.toggle_outline();
+                false
+            }
+            CommandAction::ToggleHelp => {
+                self.toggle_help();
+                false
+            }
+            CommandAction::ToggleRawSource => {
+                self.toggle_raw_source();
+                false
+            }
+            CommandAction::JumpToTop => {
+                self.first();
+                false
+            }
+            CommandAction::JumpToBottom => {
+                self.last();
+                false
+            }
+            CommandAction::Quit => true,
+        }
+    }
+
+    /// Get selected command for display
+    pub fn selected_command(&self) -> Option<&'static PaletteCommand> {
+        self.command_filtered
+            .get(self.command_selected)
+            .map(|&idx| &PALETTE_COMMANDS[idx])
     }
 
     pub fn jump_to_heading(&mut self, index: usize) {
@@ -1316,14 +1875,16 @@ impl App {
     /// - `[[filename]]` - load file (tries .md, .markdown extensions)
     /// - `[[filename#anchor]]` - load file and jump to anchor
     /// - `[[#anchor]]` - jump to anchor in current document
+    /// - `[[path/to/file]]` - load file with path (e.g., `[[diary/notes.md]]`)
     ///
-    /// Security: WikiLinks must be simple filenames without path separators
-    /// to prevent directory traversal attacks.
+    /// Security: Path traversal (..) and absolute paths are blocked.
+    /// The `load_file()` function provides additional security validation.
     fn load_wikilink(&mut self, target: &str) -> Result<(), String> {
         // Handle anchor-only wikilinks (e.g., [[#section]])
         if let Some(anchor) = target.strip_prefix('#') {
             // Jump to heading in current document
-            self.select_by_text(anchor);
+            self.jump_to_anchor(anchor)?;
+            self.status_message = Some(format!("✓ Jumped to #{}", anchor));
             return Ok(());
         }
 
@@ -1334,16 +1895,24 @@ impl App {
             (target, None)
         };
 
-        // Security: Reject wikilinks containing path separators or traversal
-        if file_target.contains('/') || file_target.contains('\\') || file_target.contains("..") {
-            return Err("WikiLinks cannot contain path separators".to_string());
+        // Security: Reject path traversal attempts
+        if file_target.contains("..") {
+            return Err("WikiLinks cannot contain path traversal (..)".to_string());
         }
 
-        // Security: Reject absolute paths (Windows drive letters)
+        // Security: Reject absolute paths
+        if file_target.starts_with('/') {
+            return Err("WikiLinks cannot be absolute paths".to_string());
+        }
+
+        // Security: Reject Windows absolute paths (drive letters)
         #[cfg(windows)]
         if file_target.len() >= 2 && file_target.chars().nth(1) == Some(':') {
             return Err("WikiLinks cannot be absolute paths".to_string());
         }
+
+        // Normalize backslashes to forward slashes for cross-platform compatibility
+        let file_target = file_target.replace('\\', "/");
 
         // Try to find the file relative to current directory
         let current_dir = self
@@ -1773,11 +2342,28 @@ impl App {
             .persist(&self.current_file_path)
             .map_err(|e| format!("Failed to save file: {}", e))?;
 
+        // Save scroll position and interactive element index before reload
+        let saved_scroll = self.content_scroll;
+        let saved_element_idx = self.interactive_state.current_index;
+
         // Reload the document
         self.reload_current_file()?;
 
         // Re-index interactive elements
         self.reindex_interactive_elements();
+
+        // Restore scroll position (clamped to valid range)
+        self.content_scroll = saved_scroll.min(self.content_height.saturating_sub(1));
+        self.content_scroll_state = self
+            .content_scroll_state
+            .position(self.content_scroll as usize);
+
+        // Restore interactive element selection if still valid
+        if let Some(idx) = saved_element_idx {
+            if idx < self.interactive_state.elements.len() {
+                self.interactive_state.current_index = Some(idx);
+            }
+        }
 
         let new_state = if checked { "unchecked" } else { "checked" };
         self.status_message = Some(format!("✓ Checkbox {} and saved", new_state));
@@ -1854,8 +2440,9 @@ impl App {
         match &link.target {
             LinkTarget::Anchor(anchor) => {
                 // Jump to heading in current document
-                self.select_by_text(anchor);
+                self.jump_to_anchor(anchor)?;
                 self.exit_interactive_mode();
+                self.status_message = Some(format!("✓ Jumped to #{}", anchor));
                 Ok(())
             }
             LinkTarget::RelativeFile { path, anchor } => {

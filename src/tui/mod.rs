@@ -126,6 +126,34 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                         _ => {}
                     }
                 }
+                // Handle save width confirmation modal
+                else if app.mode == app::AppMode::ConfirmSaveWidth {
+                    match key.code {
+                        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                            app.confirm_save_outline_width();
+                        }
+                        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                            app.cancel_save_width_confirmation();
+                        }
+                        _ => {}
+                    }
+                }
+                // Handle command palette
+                else if app.mode == app::AppMode::CommandPalette {
+                    match key.code {
+                        KeyCode::Esc => app.close_command_palette(),
+                        KeyCode::Enter => {
+                            if app.execute_selected_command() {
+                                return Ok(()); // Quit command executed
+                            }
+                        }
+                        KeyCode::Backspace => app.command_palette_backspace(),
+                        KeyCode::Down | KeyCode::Tab => app.command_palette_next(),
+                        KeyCode::Up | KeyCode::BackTab => app.command_palette_prev(),
+                        KeyCode::Char(c) => app.command_palette_input(c),
+                        _ => {}
+                    }
+                }
                 // Handle interactive mode
                 else if app.mode == app::AppMode::Interactive {
                     // Check if we're in table navigation mode
@@ -442,7 +470,40 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                         }
                     }
                 }
-                // Handle search mode separately
+                // Handle document search mode (in-document search with n/N navigation)
+                else if app.mode == app::AppMode::DocSearch {
+                    if app.doc_search_active {
+                        // Search input mode - typing the query
+                        match key.code {
+                            KeyCode::Esc => app.cancel_doc_search(),
+                            KeyCode::Enter => app.accept_doc_search(),
+                            KeyCode::Char(c) => app.doc_search_input(c),
+                            KeyCode::Backspace => app.doc_search_backspace(),
+                            KeyCode::Down => app.next_doc_match(),
+                            KeyCode::Up => app.prev_doc_match(),
+                            _ => {}
+                        }
+                    } else {
+                        // Search navigation mode - n/N to navigate matches
+                        match key.code {
+                            KeyCode::Esc => app.clear_doc_search(),
+                            KeyCode::Char('n') => app.next_doc_match(),
+                            KeyCode::Char('N') => app.prev_doc_match(),
+                            KeyCode::Char('/') => {
+                                // Re-enter search input mode
+                                app.doc_search_active = true;
+                            }
+                            KeyCode::Char('q') => return Ok(()),
+                            // Allow navigation while in search mode
+                            KeyCode::Char('j') | KeyCode::Down => app.next(),
+                            KeyCode::Char('k') | KeyCode::Up => app.previous(),
+                            KeyCode::Char('d') => app.scroll_page_down(),
+                            KeyCode::Char('u') => app.scroll_page_up(),
+                            _ => {}
+                        }
+                    }
+                }
+                // Handle outline search mode separately
                 else if app.show_search {
                     match key.code {
                         KeyCode::Esc => app.toggle_search(),
@@ -463,7 +524,23 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                     match key.code {
                         KeyCode::Char('q') | KeyCode::Esc if !app.show_help => return Ok(()),
                         KeyCode::Char('?') => app.toggle_help(),
-                        KeyCode::Char('/') => app.toggle_search(),
+                        KeyCode::Char('/') => {
+                            // / in outline = filter headings, / in content = search document
+                            if app.focus == app::Focus::Content {
+                                app.enter_doc_search();
+                            } else {
+                                app.toggle_search();
+                            }
+                        }
+                        // n/N for document search navigation from normal mode
+                        KeyCode::Char('n') if !app.doc_search_matches.is_empty() => {
+                            app.mode = app::AppMode::DocSearch;
+                            app.next_doc_match();
+                        }
+                        KeyCode::Char('N') if !app.doc_search_matches.is_empty() => {
+                            app.mode = app::AppMode::DocSearch;
+                            app.prev_doc_match();
+                        }
                         KeyCode::Esc if app.show_help => app.toggle_help(),
                         KeyCode::Char('j') | KeyCode::Down => app.next(),
                         KeyCode::Char('k') | KeyCode::Up => app.previous(),
@@ -480,6 +557,8 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                         KeyCode::Char('w') => app.toggle_outline(),
                         KeyCode::Char('[') => app.cycle_outline_width(false),
                         KeyCode::Char(']') => app.cycle_outline_width(true),
+                        KeyCode::Char('S') => app.show_save_width_confirmation(),
+                        KeyCode::Char(':') => app.open_command_palette(),
                         KeyCode::Char('m') => app.set_bookmark(),
                         KeyCode::Char('\'') => app.jump_to_bookmark(),
                         KeyCode::Char('1') => app.jump_to_heading(0),
