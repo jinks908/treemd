@@ -1959,11 +1959,7 @@ dependencies = [
 
 [[package]]
 name = "treemd"
-<<<<<<< HEAD
-version = "0.4.5"
-=======
 version = "0.4.7"
->>>>>>> upstream/main
 dependencies = [
  "arboard",
  "clap",
