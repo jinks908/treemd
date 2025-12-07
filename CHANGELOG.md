@@ -5,6 +5,64 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.8] - 2025-12-07
+
+### Added
+
+- **Live file watching and auto-reload** - Watch the current file for external changes
+  - Automatically reload when file is modified externally (e.g., edited in another editor)
+  - Scroll position and interactive elements preserved on reload
+  - Status message shows "↻ File reloaded (external change)"
+  - Gracefully handles file system watching across platforms (FSEvents/inotify/etc)
+  - Smart debouncing prevents double-reload on internal saves
+
+- **Document search from interactive mode** - Search while interacting with elements
+  - Press `/` to start document search from interactive mode
+  - Use `n`/`N` to navigate matches while in interactive mode
+  - Returns to interactive mode when search is closed
+  - Works alongside interactive element navigation
+
+### Fixed
+
+- **Document search from interactive mode** - Document search now accessible in interactive mode ([#30](https://github.com/Epistates/treemd/issues/30))
+  - Can press `/` to search without leaving interactive mode
+  - Search matches navigable with `n`/`N` from any mode
+  - Returns to interactive mode after search closes
+
+- **Interactive elements not re-indexed on external reload** - New interactive elements added externally now appear
+  - Re-indexes interactive elements after external file reload
+  - Restores element selection if still valid after reload
+  - Maintains viewport position during reload
+
+- **Viewport jumping on checkbox toggle** - No longer re-centers viewport when toggling checkboxes ([#31](https://github.com/Epistates/treemd/issues/31))
+  - Fixed double-reload race condition (internal save + file watcher)
+  - Suppresses file watcher after internal saves to prevent duplicate reload
+  - Interactive state fully preserved during checkbox toggle
+
+### Technical
+
+- **File watcher module** (`src/tui/watcher.rs`)
+  - `FileWatcher` struct using notify 8.0 crate
+  - Cross-platform file system event monitoring
+  - Debounced event detection (100ms)
+  - Handles modification, write, and create events
+
+- **Live reload integration** (`src/tui/mod.rs`)
+  - File watcher created at TUI startup
+  - Event loop checks for changes during idle periods (100ms poll timeout)
+  - State preservation on external reload (scroll, selection, interactive elements)
+  - File path change tracking for watcher updates
+
+- **Interactive state preservation** (`src/tui/app.rs`)
+  - `suppress_file_watch` flag prevents double-reload on internal saves
+  - `sync_previous_selection()` prevents spurious scroll resets
+  - `reindex_interactive_elements()` now public for external reload handling
+  - Proper state restoration during concurrent operations
+
+### Dependencies
+
+- Added `notify = "8.0"` for cross-platform file system watching
+
 ## [0.4.7] - 2025-12-07
 
 ### Added
@@ -27,14 +85,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Status bar shows match count and current position
 
 ### Fixed
-
-- **File creation modal not appearing** - Fixed issue where following links to non-existent files would say "file opened" but not show the creation prompt
-  - `exit_interactive_mode()` and `exit_link_follow_mode()` were overwriting the `ConfirmFileCreate` mode
-  - Now checks if file creation is pending before resetting mode
-
-- **Double `.md` extension on wikilinks** - Fixed wikilinks like `[[file.md]]` creating `file.md.md`
-  - Now detects if wikilink target already has a markdown extension
-  - Only adds `.md` if not already present
 
 - **Anchor links in interactive mode** - Following anchor links to headings in current file now works correctly ([#29](https://github.com/Epistates/treemd/issues/29))
   - Changed from `select_by_text()` to `jump_to_anchor()` for proper anchor handling
