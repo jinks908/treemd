@@ -287,7 +287,87 @@ impl InteractiveState {
                             }
                         }
 
+                        // Account for main item line
                         current_line += 1;
+
+                        // Process nested blocks within list items (code blocks, tables, etc.)
+                        for (nested_idx, nested_block) in item.blocks.iter().enumerate() {
+                            let nested_start_line = current_line;
+                            match nested_block {
+                                Block::Code {
+                                    language, content, ..
+                                } => {
+                                    // Use composite sub_idx: item_idx * 10000 + nested_idx * 10 + offset
+                                    let id = ElementId {
+                                        block_idx,
+                                        sub_idx: Some(item_idx * 10000 + nested_idx * 10 + 5000),
+                                    };
+
+                                    let lines = 2 + content.lines().count();
+
+                                    self.elements.push(InteractiveElement {
+                                        id,
+                                        element_type: ElementType::CodeBlock {
+                                            language: language.clone(),
+                                            content: content.clone(),
+                                            block_idx,
+                                        },
+                                        line_range: (nested_start_line, nested_start_line + lines),
+                                    });
+
+                                    current_line += lines;
+                                }
+                                Block::Table { headers, rows, .. } => {
+                                    let id = ElementId {
+                                        block_idx,
+                                        sub_idx: Some(item_idx * 10000 + nested_idx * 10 + 6000),
+                                    };
+
+                                    let lines = 3 + rows.len();
+
+                                    self.elements.push(InteractiveElement {
+                                        id,
+                                        element_type: ElementType::Table {
+                                            rows: rows.len(),
+                                            cols: headers.len(),
+                                            block_idx,
+                                        },
+                                        line_range: (nested_start_line, nested_start_line + lines),
+                                    });
+
+                                    self.element_states
+                                        .entry(id)
+                                        .or_insert(ElementState::Table {
+                                            selected_row: 0,
+                                            selected_col: 0,
+                                        });
+
+                                    current_line += lines;
+                                }
+                                Block::Image { alt, src, .. } => {
+                                    let id = ElementId {
+                                        block_idx,
+                                        sub_idx: Some(item_idx * 10000 + nested_idx * 10 + 7000),
+                                    };
+
+                                    self.elements.push(InteractiveElement {
+                                        id,
+                                        element_type: ElementType::Image {
+                                            alt: alt.clone(),
+                                            src: src.clone(),
+                                            block_idx,
+                                        },
+                                        line_range: (nested_start_line, nested_start_line + 1),
+                                    });
+
+                                    current_line += 1;
+                                }
+                                _ => {
+                                    // Non-interactive nested blocks
+                                    current_line += count_single_block_lines(nested_block);
+                                }
+                            }
+                        }
                     }
                 }
                 Block::Code {
@@ -740,5 +820,88 @@ fn count_single_block_lines(block: &Block) -> usize {
         Block::Image { .. } => 1,
         Block::HorizontalRule => 1,
         Block::Details { blocks, .. } => 1 + count_block_lines(blocks),
+    }
+}
+
+#[cfg(test)]
+mod interactive_tests {
+    use super::*;
+    use crate::parser::content::parse_content;
+
+    #[test]
+    fn test_nested_code_blocks_in_list_items() {
+        // Regression test: code blocks nested inside list items should be detected
+        let markdown = r#"# Test Document
+
+1. **First step**
+   ```bash
+   echo "hello"
+   ```
+
+2. **Second step**
+   ```python
+   print("world")
+   ```
+
+| Header | Value |
+|--------|-------|
+| A      | 1     |
+"#;
+
+        let blocks = parse_content(markdown, 0);
+        let mut state = InteractiveState::new();
+        state.index_elements(&blocks);
+
+        // Should find: 2 nested code blocks + 1 table = 3 interactive elements
+        assert_eq!(
+            state.elements.len(),
+            3,
+            "Should find 2 code blocks and 1 table"
+        );
+
+        // Verify we have the right types
+        let code_count = state
+            .elements
+            .iter()
+            .filter(|e| matches!(e.element_type, ElementType::CodeBlock { .. }))
+            .count();
+        let table_count = state
+            .elements
+            .iter()
+            .filter(|e| matches!(e.element_type, ElementType::Table { .. }))
+            .count();
+
+        assert_eq!(code_count, 2, "Should find 2 code blocks");
+        assert_eq!(table_count, 1, "Should find 1 table");
+    }
+
+    #[test]
+    fn test_mixed_interactive_elements() {
+        let markdown = r#"# Document
+
+A paragraph with a [link](https://example.com).
+
+- [ ] Unchecked task
+- [x] Checked task
+
+```rust
+fn main() {}
+```
+
+| Col1 | Col2 |
+|------|------|
+| a    | b    |
+"#;
+
+        let blocks = parse_content(markdown, 0);
+        let mut state = InteractiveState::new();
+        state.index_elements(&blocks);
+
+        // Should find: 1 link + 2 checkboxes + 1 code block + 1 table = 5 elements
+        assert!(
+            state.elements.len() >= 5,
+            "Should find at least 5 interactive elements, found {}",
+            state.elements.len()
+        );
     }
 }
