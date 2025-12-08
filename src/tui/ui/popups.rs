@@ -488,3 +488,151 @@ pub fn render_file_create_confirm(frame: &mut Frame, message: &str, theme: &Them
 
     frame.render_widget(paragraph, area);
 }
+
+/// Render the save width confirmation modal
+pub fn render_save_width_confirm(frame: &mut Frame, width: u16, theme: &Theme) {
+    use crate::tui::ui::util::centered_area;
+
+    // Create a centered dialog area
+    let area = centered_area(frame.area(), 45, 18);
+
+    // Clear the area
+    frame.render_widget(Clear, area);
+
+    // Create the dialog content
+    let text = vec![
+        Line::from(vec![Span::styled(
+            "Save Outline Width",
+            Style::default()
+                .fg(theme.modal_title())
+                .add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            format!("Save width {}% to config file?", width),
+            Style::default().fg(theme.modal_text()),
+        )]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("[y/Enter]", Style::default().fg(theme.modal_key_fg())),
+            Span::styled(" Save  ", Style::default().fg(theme.modal_description())),
+            Span::styled("[n/Esc]", Style::default().fg(theme.modal_key_fg())),
+            Span::styled(" Cancel", Style::default().fg(theme.modal_description())),
+        ]),
+    ];
+
+    let paragraph = Paragraph::new(text)
+        .alignment(ratatui::layout::Alignment::Center)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Confirm ")
+                .title_style(Style::default().fg(theme.modal_title()))
+                .border_style(Style::default().fg(theme.modal_border()))
+                .style(Style::default().bg(theme.modal_bg())),
+        );
+
+    frame.render_widget(paragraph, area);
+}
+
+/// Render the command palette with fuzzy search
+pub fn render_command_palette(frame: &mut Frame, app: &App, theme: &Theme) {
+    use crate::tui::app::PALETTE_COMMANDS;
+    use crate::tui::ui::util::centered_area;
+
+    // Create a centered popup
+    let area = centered_area(frame.area(), 60, 50);
+
+    // Clear the area
+    frame.render_widget(Clear, area);
+
+    // Build the content
+    let mut lines = vec![
+        // Title
+        Line::from(vec![Span::styled(
+            "Command Palette",
+            Style::default()
+                .fg(theme.modal_title())
+                .add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(""),
+        // Search input
+        Line::from(vec![
+            Span::styled(": ", Style::default().fg(theme.modal_key_fg())),
+            Span::styled(&app.command_query, Style::default().fg(theme.modal_text())),
+            Span::styled("█", Style::default().fg(Color::White)), // Cursor
+        ]),
+        Line::from(""),
+    ];
+
+    // Show filtered commands
+    if app.command_filtered.is_empty() {
+        lines.push(Line::from(vec![Span::styled(
+            "  No matching commands",
+            Style::default()
+                .fg(theme.modal_description())
+                .add_modifier(Modifier::ITALIC),
+        )]));
+    } else {
+        for (display_idx, &cmd_idx) in app.command_filtered.iter().enumerate() {
+            let cmd = &PALETTE_COMMANDS[cmd_idx];
+            let is_selected = display_idx == app.command_selected;
+
+            let prefix = if is_selected { "▸ " } else { "  " };
+            let style = if is_selected {
+                Style::default()
+                    .fg(theme.modal_selected_marker())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme.modal_text())
+            };
+
+            // Command name
+            let mut spans = vec![
+                Span::styled(prefix, style),
+                Span::styled(cmd.name, style),
+            ];
+
+            // Show aliases in dimmer text
+            if !cmd.aliases.is_empty() {
+                let aliases_str = format!(" ({})", cmd.aliases.join(", "));
+                spans.push(Span::styled(
+                    aliases_str,
+                    Style::default().fg(theme.modal_description()),
+                ));
+            }
+
+            lines.push(Line::from(spans));
+
+            // Show description for selected item
+            if is_selected {
+                lines.push(Line::from(vec![Span::styled(
+                    format!("    {}", cmd.description),
+                    Style::default()
+                        .fg(theme.modal_description())
+                        .add_modifier(Modifier::ITALIC),
+                )]));
+            }
+        }
+    }
+
+    // Footer with hints
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("↑↓/Tab", Style::default().fg(theme.modal_key_fg())),
+        Span::styled(" navigate  ", Style::default().fg(theme.modal_description())),
+        Span::styled("Enter", Style::default().fg(theme.modal_key_fg())),
+        Span::styled(" execute  ", Style::default().fg(theme.modal_description())),
+        Span::styled("Esc", Style::default().fg(theme.modal_key_fg())),
+        Span::styled(" cancel", Style::default().fg(theme.modal_description())),
+    ]));
+
+    let paragraph = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme.modal_border()))
+            .style(Style::default().bg(theme.modal_bg())),
+    );
+
+    frame.render_widget(paragraph, area);
+}

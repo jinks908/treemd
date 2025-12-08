@@ -6,6 +6,7 @@ pub mod terminal_compat;
 pub mod theme;
 pub mod tty; // Public module for TTY handling
 mod ui;
+mod watcher;
 
 pub use app::App;
 pub use interactive::InteractiveState;
@@ -18,26 +19,32 @@ use crossterm::event::{Event, KeyCode, KeyEventKind};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
+use opensesame::Editor;
 use ratatui::DefaultTerminal;
 use std::io::stdout;
+use std::path::Path;
 use std::time::Duration;
 
-/// Suspend the TUI, run an external editor, then restore the TUI
-fn run_editor(terminal: &mut DefaultTerminal, file_path: &std::path::PathBuf) -> Result<()> {
+/// Suspend the TUI, run an external editor, then restore the TUI.
+///
+/// If line is provided and the editor supports it, the file will be opened at that line.
+fn run_editor(terminal: &mut DefaultTerminal, file: &Path, line: Option<u32>) -> Result<()> {
     // Leave alternate screen and disable raw mode to give editor full terminal control
     stdout().execute(LeaveAlternateScreen)?;
     disable_raw_mode()?;
 
     // Open file in editor (blocks until editor closes)
-    let result = edit::edit_file(file_path);
+    let result = match line {
+        Some(l) => Editor::open_at(file, l),
+        None => Editor::open(file),
+    };
 
     // Restore terminal state
     stdout().execute(EnterAlternateScreen)?;
     enable_raw_mode()?;
     terminal.clear()?;
 
-    // Return editor result
-    result.map_err(|e| e.into())
+    result.map_err(|e| color_eyre::eyre::eyre!("{}", e))
 }
 
 /// Run the TUI application.
@@ -56,8 +63,22 @@ fn run_editor(terminal: &mut DefaultTerminal, file_path: &std::path::PathBuf) ->
 pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
     let mut app = app;
 
+    // Create file watcher for live reload
+    let mut file_watcher = watcher::FileWatcher::new().ok();
+    if let Some(ref mut watcher) = file_watcher {
+        let _ = watcher.watch(&app.current_file_path);
+    }
+
     loop {
         terminal.draw(|frame| ui::render(frame, &mut app))?;
+
+        // Update file watcher if the current file changed (e.g., via navigation)
+        if app.file_path_changed {
+            app.file_path_changed = false;
+            if let Some(ref mut watcher) = file_watcher {
+                let _ = watcher.watch(&app.current_file_path);
+            }
+        }
 
         // Handle pending editor file open (from link following non-markdown files)
         if let Some(file_path) = app.pending_editor_file.take() {
@@ -65,7 +86,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("file");
-            match run_editor(terminal, &file_path) {
+            match run_editor(terminal, &file_path, None) {
                 Ok(_) => {
                     app.status_message = Some(format!("✓ Opened {} in editor", filename));
                 }
@@ -79,7 +100,46 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
         // Poll for events with timeout to allow status message expiration
         // Use 100ms timeout for responsive UI updates
         if !tty::poll_event(Duration::from_millis(100))? {
-            // No event, just continue loop to redraw (handles status message timeout)
+            // No keyboard event - check for file changes (unless suppressed after internal save)
+            if app.suppress_file_watch {
+                // Clear suppression and drain any pending file events
+                app.suppress_file_watch = false;
+                if let Some(ref mut watcher) = file_watcher {
+                    watcher.check_for_changes(); // Drain events, ignore result
+                }
+            } else if let Some(ref mut watcher) = file_watcher {
+                if watcher.check_for_changes() {
+                    // Save state before reload
+                    let was_interactive = app.mode == app::AppMode::Interactive;
+                    let saved_scroll = app.content_scroll;
+                    let saved_element_idx = app.interactive_state.current_index;
+
+                    // File changed externally - reload with state preservation
+                    if let Err(e) = app.reload_current_file() {
+                        app.status_message = Some(format!("✗ Reload failed: {}", e));
+                    } else {
+                        // Re-index interactive elements if in interactive mode
+                        if was_interactive {
+                            app.reindex_interactive_elements();
+                            // Restore element selection if still valid
+                            if let Some(idx) = saved_element_idx {
+                                if idx < app.interactive_state.elements.len() {
+                                    app.interactive_state.current_index = Some(idx);
+                                }
+                            }
+                        }
+                        // Restore scroll position
+                        app.content_scroll = saved_scroll.min(app.content_height.saturating_sub(1));
+                        app.content_scroll_state = app
+                            .content_scroll_state
+                            .position(app.content_scroll as usize);
+                        // Sync previous_selection to prevent update_content_metrics() from resetting scroll
+                        app.sync_previous_selection();
+
+                        app.status_message = Some("↻ File reloaded (external change)".to_string());
+                    }
+                }
+            }
             continue;
         }
 
@@ -123,6 +183,34 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                         KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
                             app.cancel_file_create();
                         }
+                        _ => {}
+                    }
+                }
+                // Handle save width confirmation modal
+                else if app.mode == app::AppMode::ConfirmSaveWidth {
+                    match key.code {
+                        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
+                            app.confirm_save_outline_width();
+                        }
+                        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                            app.cancel_save_width_confirmation();
+                        }
+                        _ => {}
+                    }
+                }
+                // Handle command palette
+                else if app.mode == app::AppMode::CommandPalette {
+                    match key.code {
+                        KeyCode::Esc => app.close_command_palette(),
+                        KeyCode::Enter => {
+                            if app.execute_selected_command() {
+                                return Ok(()); // Quit command executed
+                            }
+                        }
+                        KeyCode::Backspace => app.command_palette_backspace(),
+                        KeyCode::Down | KeyCode::Tab => app.command_palette_next(),
+                        KeyCode::Up | KeyCode::BackTab => app.command_palette_prev(),
+                        KeyCode::Char(c) => app.command_palette_input(c),
                         _ => {}
                     }
                 }
@@ -327,6 +415,17 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                             KeyCode::Char('u') | KeyCode::PageUp => {
                                 app.scroll_page_up_interactive();
                             }
+                            // Document search from interactive mode
+                            KeyCode::Char('/') => {
+                                app.enter_doc_search();
+                            }
+                            // Navigate search matches while in interactive mode
+                            KeyCode::Char('n') if !app.doc_search_matches.is_empty() => {
+                                app.next_doc_match();
+                            }
+                            KeyCode::Char('N') if !app.doc_search_matches.is_empty() => {
+                                app.prev_doc_match();
+                            }
                             KeyCode::Char('q') => return Ok(()),
                             _ => {}
                         }
@@ -442,13 +541,99 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                         }
                     }
                 }
-                // Handle search mode separately
+                // Handle document search mode (in-document search with n/N navigation)
+                else if app.mode == app::AppMode::DocSearch {
+                    if app.doc_search_active {
+                        // Search input mode - typing the query
+                        match key.code {
+                            KeyCode::Esc => app.cancel_doc_search(),
+                            KeyCode::Enter => app.accept_doc_search(),
+                            KeyCode::Char('u') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                                // Ctrl+U: clear the search query
+                                app.doc_search_query.clear();
+                                app.update_doc_search_matches();
+                            }
+                            KeyCode::Char(c) => app.doc_search_input(c),
+                            KeyCode::Backspace => app.doc_search_backspace(),
+                            KeyCode::Down => app.next_doc_match(),
+                            KeyCode::Up => app.prev_doc_match(),
+                            _ => {}
+                        }
+                    } else {
+                        // Search navigation mode - n/N to navigate matches
+                        match key.code {
+                            KeyCode::Esc => app.clear_doc_search(),
+                            KeyCode::Enter => {
+                                // Follow selected link if match is inside a link
+                                if let Some(link_idx) = app.doc_search_selected_link_idx {
+                                    // Clear search and follow the link
+                                    app.selected_link_idx = Some(link_idx);
+                                    app.clear_doc_search();
+                                    app.mode = app::AppMode::LinkFollow;
+                                    // Re-populate links_in_view since clear_doc_search may have cleared it
+                                    let content = if let Some(heading_text) = app.selected_heading_text() {
+                                        app.document
+                                            .extract_section(heading_text)
+                                            .unwrap_or_else(|| app.document.content.clone())
+                                    } else {
+                                        app.document.content.clone()
+                                    };
+                                    app.links_in_view = crate::parser::links::extract_links(&content);
+                                    app.filtered_link_indices = (0..app.links_in_view.len()).collect();
+                                    app.selected_link_idx = Some(link_idx.min(app.links_in_view.len().saturating_sub(1)));
+                                    // Now follow the link
+                                    let _ = app.follow_selected_link();
+                                }
+                            }
+                            KeyCode::Char('n') => app.next_doc_match(),
+                            KeyCode::Char('N') => app.prev_doc_match(),
+                            KeyCode::Char('/') => {
+                                // Re-enter search input mode
+                                app.doc_search_active = true;
+                            }
+                            KeyCode::Char('u') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                                // Ctrl+U: clear the search query and highlights
+                                app.doc_search_query.clear();
+                                app.doc_search_matches.clear();
+                                app.doc_search_current_idx = None;
+                                app.doc_search_selected_link_idx = None;
+                            }
+                            KeyCode::Char('q') => return Ok(()),
+                            // Allow navigation while in search mode
+                            KeyCode::Char('j') | KeyCode::Down => app.next(),
+                            KeyCode::Char('k') | KeyCode::Up => app.previous(),
+                            KeyCode::Char('d') => app.scroll_page_down(),
+                            KeyCode::Char('u') => app.scroll_page_up(),
+                            // Allow entering interactive and link follow modes
+                            KeyCode::Char('i') => {
+                                app.clear_doc_search();
+                                app.enter_interactive_mode();
+                            }
+                            KeyCode::Char('f') => {
+                                app.clear_doc_search();
+                                app.enter_link_follow_mode();
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                // Handle outline search mode separately
                 else if app.show_search {
                     match key.code {
-                        KeyCode::Esc => app.toggle_search(),
+                        KeyCode::Esc => {
+                            // Esc clears the filter and closes search
+                            app.search_query.clear();
+                            app.filter_outline();
+                            app.show_search = false;
+                        }
                         KeyCode::Enter => {
-                            app.toggle_search();
-                            // Keep the filtered results
+                            // Enter keeps filter results but closes search bar
+                            app.show_search = false;
+                        }
+                        KeyCode::Char('u') if key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+                            // Ctrl+U: clear the search query
+                            app.search_query.clear();
+                            app.filter_outline();
                         }
                         KeyCode::Char(c) => app.search_input(c),
                         KeyCode::Backspace => app.search_backspace(),
@@ -463,7 +648,23 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                     match key.code {
                         KeyCode::Char('q') | KeyCode::Esc if !app.show_help => return Ok(()),
                         KeyCode::Char('?') => app.toggle_help(),
-                        KeyCode::Char('/') => app.toggle_search(),
+                        KeyCode::Char('/') => {
+                            // / always enters document search (vim-like behavior)
+                            app.enter_doc_search();
+                        }
+                        KeyCode::Char('s') => {
+                            // s opens outline filter
+                            app.toggle_search();
+                        }
+                        // n/N for document search navigation from normal mode
+                        KeyCode::Char('n') if !app.doc_search_matches.is_empty() => {
+                            app.mode = app::AppMode::DocSearch;
+                            app.next_doc_match();
+                        }
+                        KeyCode::Char('N') if !app.doc_search_matches.is_empty() => {
+                            app.mode = app::AppMode::DocSearch;
+                            app.prev_doc_match();
+                        }
                         KeyCode::Esc if app.show_help => app.toggle_help(),
                         KeyCode::Char('l') | KeyCode::Down => app.next(),
                         KeyCode::Char('k') | KeyCode::Up => app.previous(),
@@ -480,6 +681,8 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                         KeyCode::Char('w') => app.toggle_outline(),
                         KeyCode::Char('[') => app.cycle_outline_width(false),
                         KeyCode::Char(']') => app.cycle_outline_width(true),
+                        KeyCode::Char('S') => app.show_save_width_confirmation(),
+                        KeyCode::Char(':') => app.open_command_palette(),
                         KeyCode::Char('m') => app.set_bookmark(),
                         KeyCode::Char('\'') => app.jump_to_bookmark(),
                         KeyCode::Char('1') => app.jump_to_heading(0),
@@ -497,8 +700,11 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
                         KeyCode::Char('Y') => app.copy_anchor(),
                         // Edit file
                         KeyCode::Char('e') => {
+                            // Get the source line for the selected heading (if any)
+                            let line = app.selected_heading_source_line();
+
                             // Run editor with proper terminal suspend/restore
-                            match run_editor(terminal, &app.current_file_path) {
+                            match run_editor(terminal, &app.current_file_path, line) {
                                 Ok(_) => {
                                     // Reload file after successful edit
                                     if let Err(e) = app.reload_current_file() {

@@ -1,6 +1,6 @@
 [package]
 name = "treemd"
-version = "0.4.7"
+version = "0.4.8"
 edition = "2024"
 authors = ["epistates, inc. <nick@epistates.com>"]
 description = "A markdown navigator with tree-based structural navigation and syntax highlighting"
@@ -61,9 +61,6 @@ arboard = { version = "3.4", features = ["wayland-data-control"] }
 # Open URLs in default browser
 open = "5.3"
 
-# Open files in default editor
-edit = "0.1"
-
 # Atomic file operations
 tempfile = "3.15"
 
@@ -73,6 +70,12 @@ toml = "0.9"
 
 # Terminal color capability detection
 supports-color = "3.0"
+
+# File system watching for live reload
+notify = "8.0"
+
+# Open files in editor with line:column positioning
+opensesame = "0.1"
 
 # Unix system calls for TTY handling
 [target.'cfg(unix)'.dependencies]
