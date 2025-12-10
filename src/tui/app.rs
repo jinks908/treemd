@@ -1,10 +1,12 @@
 use crate::config::Config;
+use crate::keybindings::{Action, KeybindingMode, Keybindings};
 use crate::parser::{Document, HeadingNode, Link, extract_links};
 use crate::tui::help_text;
 use crate::tui::interactive::InteractiveState;
 use crate::tui::syntax::SyntaxHighlighter;
 use crate::tui::terminal_compat::ColorMode;
 use crate::tui::theme::{Theme, ThemeName};
+use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::widgets::{ListState, ScrollbarState};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -280,6 +282,9 @@ pub struct App {
     pub command_query: String,
     pub command_filtered: Vec<usize>, // Indices into PALETTE_COMMANDS
     pub command_selected: usize,
+
+    // Customizable keybindings
+    pub keybindings: Keybindings,
 }
 
 /// Saved state for file navigation history
@@ -347,6 +352,9 @@ impl App {
         // Standard values: 20, 30, 40 - anything else is a custom power-user setting
         let config_has_custom_outline_width =
             outline_width != 20 && outline_width != 30 && outline_width != 40;
+
+        // Load keybindings from config (before config is moved)
+        let keybindings = config.keybindings();
 
         Self {
             document,
@@ -427,7 +435,69 @@ impl App {
             command_query: String::new(),
             command_filtered: (0..PALETTE_COMMANDS.len()).collect(),
             command_selected: 0,
+
+            // Customizable keybindings (loaded from config)
+            // Note: keybindings() called before config is moved into struct
+            keybindings,
         }
+    }
+
+    /// Get the current keybinding mode based on app state
+    pub fn current_keybinding_mode(&self) -> KeybindingMode {
+        // Check modal states first
+        if self.show_help {
+            return KeybindingMode::Help;
+        }
+        if self.show_theme_picker {
+            return KeybindingMode::ThemePicker;
+        }
+
+        // Then check app mode
+        match self.mode {
+            AppMode::Normal => {
+                if self.show_search {
+                    KeybindingMode::Search
+                } else {
+                    KeybindingMode::Normal
+                }
+            }
+            AppMode::Interactive => {
+                if self.interactive_state.is_in_table_mode() {
+                    KeybindingMode::InteractiveTable
+                } else {
+                    KeybindingMode::Interactive
+                }
+            }
+            AppMode::LinkFollow => {
+                if self.link_search_active {
+                    KeybindingMode::LinkSearch
+                } else {
+                    KeybindingMode::LinkFollow
+                }
+            }
+            AppMode::Search => KeybindingMode::Search,
+            AppMode::ThemePicker => KeybindingMode::ThemePicker,
+            AppMode::Help => KeybindingMode::Help,
+            AppMode::CellEdit => KeybindingMode::CellEdit,
+            AppMode::ConfirmFileCreate | AppMode::ConfirmSaveWidth => KeybindingMode::ConfirmDialog,
+            AppMode::DocSearch => KeybindingMode::DocSearch,
+            AppMode::CommandPalette => KeybindingMode::CommandPalette,
+        }
+    }
+
+    /// Get the action for a key press in the current mode
+    pub fn get_action_for_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Option<Action> {
+        use crossterm::event::{KeyEvent, KeyEventKind, KeyEventState};
+
+        let mode = self.current_keybinding_mode();
+        let event = KeyEvent {
+            code,
+            modifiers,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        };
+
+        self.keybindings.dispatch(mode, event)
     }
 
     /// Toggle between raw source view and rendered markdown view
