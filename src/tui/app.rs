@@ -1,10 +1,12 @@
 use crate::config::Config;
+use crate::keybindings::{Action, KeybindingMode, Keybindings};
 use crate::parser::{Document, HeadingNode, Link, extract_links};
 use crate::tui::help_text;
 use crate::tui::interactive::InteractiveState;
 use crate::tui::syntax::SyntaxHighlighter;
 use crate::tui::terminal_compat::ColorMode;
 use crate::tui::theme::{Theme, ThemeName};
+use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::widgets::{ListState, ScrollbarState};
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -12,6 +14,17 @@ use std::time::{Duration, Instant};
 
 /// Special marker for the document overview entry (shows entire file content)
 pub const DOCUMENT_OVERVIEW: &str = "(Document)";
+
+/// Result of executing an action
+#[derive(Debug)]
+pub enum ActionResult {
+    /// Continue the main loop
+    Continue,
+    /// Exit the application
+    Quit,
+    /// Run an editor on a file, optionally at a specific line
+    RunEditor(PathBuf, Option<u32>),
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Focus {
@@ -186,7 +199,7 @@ pub const PALETTE_COMMANDS: &[PaletteCommand] = &[
     ),
 ];
 
-/// A match found during document search
+/// A match found during search
 #[derive(Debug, Clone)]
 pub struct SearchMatch {
     /// Line number (0-indexed)
@@ -211,10 +224,11 @@ pub struct App {
     pub show_help: bool,
     pub help_scroll: u16,
     pub show_search: bool,
+    pub outline_search_active: bool, // Whether search input is active (cursor visible)
     pub search_query: String,
     pub highlighter: SyntaxHighlighter,
     pub show_outline: bool,
-    pub outline_width: u16,                // Percentage: 20, 30, or 40
+    pub outline_width: u16, // Percentage: 20, 30, or 40
     /// Whether the config file had a custom (non-standard) outline width at startup.
     /// Used to protect power users' custom config values from being overwritten.
     /// Standard values are 20, 30, 40; anything else is considered custom.
@@ -225,14 +239,15 @@ pub struct App {
     pub theme: Theme,
     pub show_theme_picker: bool,
     pub theme_picker_selected: usize,
-    previous_selection: Option<String>, // Track previous selection to detect changes
+    pub theme_picker_original: Option<ThemeName>, // Original theme before picker opened (for cancel)
+    previous_selection: Option<String>,           // Track previous selection to detect changes
 
     // Link following state
     pub mode: AppMode,
-    pub current_file_path: PathBuf,  // Path to current file for resolving relative links
-    pub file_path_changed: bool,     // Flag to signal file watcher needs update
-    pub suppress_file_watch: bool,   // Skip next file watch check (after internal save)
-    pub links_in_view: Vec<Link>,    // Links in currently displayed content
+    pub current_file_path: PathBuf, // Path to current file for resolving relative links
+    pub file_path_changed: bool,    // Flag to signal file watcher needs update
+    pub suppress_file_watch: bool,  // Skip next file watch check (after internal save)
+    pub links_in_view: Vec<Link>,   // Links in currently displayed content
     pub filtered_link_indices: Vec<usize>, // Indices into links_in_view after filtering
     pub selected_link_idx: Option<usize>, // Currently selected index in filtered list
     pub link_search_query: String,  // Search query for filtering links
@@ -272,7 +287,7 @@ pub struct App {
     pub doc_search_query: String,
     pub doc_search_matches: Vec<SearchMatch>,
     pub doc_search_current_idx: Option<usize>,
-    pub doc_search_active: bool,        // Whether search input is active
+    pub doc_search_active: bool, // Whether search input is active
     pub doc_search_from_interactive: bool, // Whether search was started from interactive mode
     pub doc_search_selected_link_idx: Option<usize>, // Index into links_in_view if match is in a link
 
@@ -280,6 +295,9 @@ pub struct App {
     pub command_query: String,
     pub command_filtered: Vec<usize>, // Indices into PALETTE_COMMANDS
     pub command_selected: usize,
+
+    // Customizable keybindings
+    pub keybindings: Keybindings,
 }
 
 /// Saved state for file navigation history
@@ -348,6 +366,9 @@ impl App {
         let config_has_custom_outline_width =
             outline_width != 20 && outline_width != 30 && outline_width != 40;
 
+        // Load keybindings from config (before config is moved)
+        let keybindings = config.keybindings();
+
         Self {
             document,
             filename,
@@ -362,6 +383,7 @@ impl App {
             show_help: false,
             help_scroll: 0,
             show_search: false,
+            outline_search_active: false,
             search_query: String::new(),
             highlighter: SyntaxHighlighter::new(),
             show_outline: true,
@@ -373,6 +395,7 @@ impl App {
             theme,
             show_theme_picker: false,
             theme_picker_selected: 0,
+            theme_picker_original: None,
             previous_selection: None,
 
             // Link following state
@@ -427,6 +450,446 @@ impl App {
             command_query: String::new(),
             command_filtered: (0..PALETTE_COMMANDS.len()).collect(),
             command_selected: 0,
+
+            // Customizable keybindings (loaded from config)
+            // Note: keybindings() called before config is moved into struct
+            keybindings,
+        }
+    }
+
+    /// Get the current keybinding mode based on app state
+    pub fn current_keybinding_mode(&self) -> KeybindingMode {
+        // Check modal states first
+        if self.show_help {
+            return KeybindingMode::Help;
+        }
+        if self.show_theme_picker {
+            return KeybindingMode::ThemePicker;
+        }
+
+        // Then check app mode
+        match self.mode {
+            AppMode::Normal => {
+                if self.show_search && self.outline_search_active {
+                    // Active input mode for typing search query
+                    KeybindingMode::Search
+                } else {
+                    // Normal mode (including accepted outline search state)
+                    // When show_search=true but outline_search_active=false, we're in
+                    // "accepted search" state - user can navigate filtered results with
+                    // normal keybindings (j/k, n/N for cycling, s to start new search)
+                    KeybindingMode::Normal
+                }
+            }
+            AppMode::Interactive => {
+                if self.interactive_state.is_in_table_mode() {
+                    KeybindingMode::InteractiveTable
+                } else {
+                    KeybindingMode::Interactive
+                }
+            }
+            AppMode::LinkFollow => {
+                if self.link_search_active {
+                    KeybindingMode::LinkSearch
+                } else {
+                    KeybindingMode::LinkFollow
+                }
+            }
+            AppMode::Search => KeybindingMode::Search,
+            AppMode::ThemePicker => KeybindingMode::ThemePicker,
+            AppMode::Help => KeybindingMode::Help,
+            AppMode::CellEdit => KeybindingMode::CellEdit,
+            AppMode::ConfirmFileCreate | AppMode::ConfirmSaveWidth => KeybindingMode::ConfirmDialog,
+            AppMode::DocSearch => KeybindingMode::DocSearch,
+            AppMode::CommandPalette => KeybindingMode::CommandPalette,
+        }
+    }
+
+    /// Get the action for a key press in the current mode
+    pub fn get_action_for_key(&mut self, code: KeyCode, modifiers: KeyModifiers) -> Option<Action> {
+        use crossterm::event::{KeyEvent, KeyEventKind, KeyEventState};
+
+        let mode = self.current_keybinding_mode();
+        let event = KeyEvent {
+            code,
+            modifiers,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        };
+
+        self.keybindings.dispatch(mode, event)
+    }
+
+    /// Execute an action, returning the result type
+    ///
+    /// Returns:
+    /// - `ActionResult::Continue` - continue the main loop
+    /// - `ActionResult::Quit` - exit the application
+    /// - `ActionResult::RunEditor(PathBuf, Option<u32>)` - run editor on file at optional line
+    pub fn execute_action(&mut self, action: Action) -> ActionResult {
+        use Action::*;
+
+        match action {
+            // === Application ===
+            Quit => {
+                // If in accepted outline search state, clear search instead of quitting
+                if self.show_search {
+                    self.search_query.clear();
+                    self.filter_outline();
+                    self.show_search = false;
+                    self.outline_search_active = false;
+                } else {
+                    return ActionResult::Quit;
+                }
+            }
+
+            // === Navigation ===
+            Next => self.next(),
+            Previous => self.previous(),
+            First => self.first(),
+            Last => self.last(),
+            PageDown => {
+                if self.show_help {
+                    self.scroll_help_page_down();
+                } else {
+                    self.scroll_page_down();
+                }
+            }
+            PageUp => {
+                if self.show_help {
+                    self.scroll_help_page_up();
+                } else {
+                    self.scroll_page_up();
+                }
+            }
+            JumpToParent => self.jump_to_parent(),
+
+            // === Outline ===
+            Expand => self.expand(),
+            Collapse => self.collapse(),
+            ToggleExpand => self.toggle_expand(),
+            ToggleFocus => self.toggle_focus(),
+            ToggleFocusBack => self.toggle_focus_back(),
+            ToggleOutline => self.toggle_outline(),
+            OutlineWidthIncrease => self.cycle_outline_width(true),
+            OutlineWidthDecrease => self.cycle_outline_width(false),
+
+            // === Bookmarks ===
+            SetBookmark => self.set_bookmark(),
+            JumpToBookmark => self.jump_to_bookmark(),
+
+            // === Mode Transitions ===
+            EnterInteractiveMode => self.enter_interactive_mode(),
+            ExitInteractiveMode => self.exit_interactive_mode(),
+            EnterLinkFollowMode => self.enter_link_follow_mode(),
+            EnterSearchMode => self.toggle_search(),
+            EnterDocSearch => self.enter_doc_search(),
+            ToggleSearchMode => self.toggle_search_mode(),
+            ExitMode => self.exit_current_mode(),
+            OpenCommandPalette => self.open_command_palette(),
+
+            // === Link Navigation ===
+            NextLink => self.next_link(),
+            PreviousLink => self.previous_link(),
+            FollowLink => {
+                if let Err(e) = self.follow_selected_link() {
+                    self.status_message = Some(format!("✗ Error: {}", e));
+                }
+                self.update_content_metrics();
+            }
+            LinkSearch => self.start_link_search(),
+
+            // === Interactive Mode ===
+            InteractiveNext => {
+                self.interactive_state.next();
+                self.scroll_to_interactive_element(20);
+                self.status_message = Some(self.interactive_state.status_text());
+            }
+            InteractivePrevious => {
+                self.interactive_state.previous();
+                self.scroll_to_interactive_element(20);
+                self.status_message = Some(self.interactive_state.status_text());
+            }
+            InteractiveActivate => {
+                if let Err(e) = self.activate_interactive_element() {
+                    self.status_message = Some(format!("✗ Error: {}", e));
+                }
+                self.update_content_metrics();
+            }
+            InteractiveNextLink => {
+                self.interactive_state.next();
+                self.scroll_to_interactive_element(20);
+                self.status_message = Some(self.interactive_state.status_text());
+            }
+            InteractivePreviousLink => {
+                self.interactive_state.previous();
+                self.scroll_to_interactive_element(20);
+                self.status_message = Some(self.interactive_state.status_text());
+            }
+            InteractiveLeft => self.table_navigate_left(),
+            InteractiveRight => self.table_navigate_right(),
+
+            // === View ===
+            ToggleRawSource => self.toggle_raw_source(),
+            ToggleHelp => self.toggle_help(),
+            ToggleThemePicker => self.toggle_theme_picker(),
+            ApplyTheme => self.apply_selected_theme(),
+
+            // === Clipboard ===
+            CopyContent => self.copy_content(),
+            CopyAnchor => self.copy_anchor(),
+
+            // === File Operations ===
+            GoBack => {
+                if self.go_back().is_ok() {
+                    self.update_content_metrics();
+                }
+            }
+            GoForward => {
+                if self.go_forward().is_ok() {
+                    self.update_content_metrics();
+                }
+            }
+            OpenInEditor => {
+                let line = self.selected_heading_source_line();
+                return ActionResult::RunEditor(self.current_file_path.clone(), line);
+            }
+
+            // === Dialog Actions ===
+            ConfirmAction => self.handle_confirm_action(),
+            CancelAction => self.handle_cancel_action(),
+
+            // === Jump to Heading by Number ===
+            JumpToHeading1 => self.jump_to_heading(0),
+            JumpToHeading2 => self.jump_to_heading(1),
+            JumpToHeading3 => self.jump_to_heading(2),
+            JumpToHeading4 => self.jump_to_heading(3),
+            JumpToHeading5 => self.jump_to_heading(4),
+            JumpToHeading6 => self.jump_to_heading(5),
+            JumpToHeading7 => self.jump_to_heading(6),
+            JumpToHeading8 => self.jump_to_heading(7),
+            JumpToHeading9 => self.jump_to_heading(8),
+
+            // === Jump to Link by Number ===
+            JumpToLink1 => self.jump_to_link(0),
+            JumpToLink2 => self.jump_to_link(1),
+            JumpToLink3 => self.jump_to_link(2),
+            JumpToLink4 => self.jump_to_link(3),
+            JumpToLink5 => self.jump_to_link(4),
+            JumpToLink6 => self.jump_to_link(5),
+            JumpToLink7 => self.jump_to_link(6),
+            JumpToLink8 => self.jump_to_link(7),
+            JumpToLink9 => self.jump_to_link(8),
+
+            // === Scroll (Content pane) ===
+            ScrollDown => self.scroll_content_down(),
+            ScrollUp => self.scroll_content_up(),
+
+            // === Help Navigation ===
+            HelpScrollDown => self.scroll_help_down(),
+            HelpScrollUp => self.scroll_help_up(),
+
+            // === Theme Picker Navigation ===
+            ThemePickerNext => self.theme_picker_next(),
+            ThemePickerPrevious => self.theme_picker_previous(),
+
+            // === Search Input ===
+            SearchBackspace => self.handle_search_backspace(),
+
+            // === Command Palette ===
+            CommandPaletteNext => self.command_palette_next(),
+            CommandPalettePrev => self.command_palette_prev(),
+
+            // === Doc Search Navigation ===
+            NextMatch => self.next_doc_match(),
+            PrevMatch => self.prev_doc_match(),
+        }
+
+        ActionResult::Continue
+    }
+
+    /// Exit the current mode based on app state
+    fn exit_current_mode(&mut self) {
+        // Handle outline search - clear everything
+        if self.show_search {
+            self.search_query.clear();
+            self.filter_outline();
+            self.show_search = false;
+            self.outline_search_active = false;
+            return;
+        }
+
+        match self.mode {
+            AppMode::Interactive => self.exit_interactive_mode(),
+            AppMode::LinkFollow => {
+                if self.link_search_active {
+                    self.stop_link_search();
+                } else if !self.link_search_query.is_empty() {
+                    self.clear_link_search();
+                } else {
+                    self.exit_link_follow_mode();
+                }
+            }
+            AppMode::Search => {
+                self.search_query.clear();
+                self.filter_outline();
+                self.show_search = false;
+            }
+            AppMode::DocSearch => {
+                if self.doc_search_active {
+                    self.cancel_doc_search();
+                } else {
+                    self.clear_doc_search();
+                }
+            }
+            AppMode::CommandPalette => self.close_command_palette(),
+            AppMode::CellEdit => {
+                self.mode = AppMode::Interactive;
+                self.status_message = Some("Editing cancelled".to_string());
+            }
+            _ => {}
+        }
+    }
+
+    /// Handle confirm action based on current mode
+    fn handle_confirm_action(&mut self) {
+        // Handle outline search - accept and keep filtered results visible
+        if self.show_search && self.outline_search_active {
+            // Check if there are any matches (filtered items with matching text)
+            let has_matches = if self.search_query.is_empty() {
+                true // Empty query matches everything
+            } else {
+                // Check if any outline items match the query
+                !self.outline_items.is_empty()
+            };
+
+            if has_matches {
+                // Accept search - deactivate input but keep filter visible
+                self.outline_search_active = false;
+                // show_search stays true to keep highlights visible
+                // User can now navigate with j/k, n/N, or press 's' to start new search
+            } else {
+                // No matches - show status message and clear search
+                self.status_message = Some(format!("Pattern not found: {}", self.search_query));
+                self.show_search = false;
+                self.outline_search_active = false;
+                self.search_query.clear();
+                self.filter_outline(); // Restore full outline
+            }
+            return;
+        }
+
+        match self.mode {
+            AppMode::ConfirmFileCreate => {
+                if let Err(e) = self.confirm_file_create() {
+                    self.status_message = Some(format!("✗ Error: {}", e));
+                }
+            }
+            AppMode::ConfirmSaveWidth => self.confirm_save_outline_width(),
+            AppMode::Search => self.show_search = false,
+            AppMode::DocSearch => self.accept_doc_search(),
+            AppMode::CommandPalette => {
+                // Execute command - Quit is handled separately
+                let _ = self.execute_selected_command();
+            }
+            AppMode::CellEdit => {
+                if let Err(e) = self.save_edited_cell() {
+                    self.status_message = Some(format!("✗ Error saving: {}", e));
+                } else {
+                    self.mode = AppMode::Interactive;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Handle cancel action based on current mode
+    fn handle_cancel_action(&mut self) {
+        match self.mode {
+            AppMode::ConfirmFileCreate => self.cancel_file_create(),
+            AppMode::ConfirmSaveWidth => self.cancel_save_width_confirmation(),
+            _ => self.exit_current_mode(),
+        }
+    }
+
+    /// Handle backspace in search contexts
+    fn handle_search_backspace(&mut self) {
+        // Handle outline search - only if active
+        if self.show_search && self.outline_search_active {
+            self.search_backspace();
+            return;
+        }
+
+        match self.mode {
+            AppMode::Search => self.search_backspace(),
+            AppMode::DocSearch => self.doc_search_backspace(),
+            AppMode::LinkFollow if self.link_search_active => self.link_search_pop(),
+            AppMode::CommandPalette => self.command_palette_backspace(),
+            AppMode::CellEdit => {
+                self.cell_edit_value.pop();
+            }
+            _ => {}
+        }
+    }
+
+    /// Navigate table left
+    fn table_navigate_left(&mut self) {
+        if !self.interactive_state.is_in_table_mode() {
+            return;
+        }
+
+        let (rows, cols) = self.get_table_dimensions();
+        if cols > 0 {
+            self.interactive_state.table_move_left();
+            self.status_message = Some(self.interactive_state.table_status_text(rows + 1, cols));
+        }
+    }
+
+    /// Navigate table right
+    fn table_navigate_right(&mut self) {
+        if !self.interactive_state.is_in_table_mode() {
+            return;
+        }
+
+        let (rows, cols) = self.get_table_dimensions();
+        if cols > 0 {
+            self.interactive_state.table_move_right(cols);
+            self.status_message = Some(self.interactive_state.table_status_text(rows + 1, cols));
+        }
+    }
+
+    /// Get table dimensions for current interactive element
+    fn get_table_dimensions(&self) -> (usize, usize) {
+        if let Some(element) = self.interactive_state.current_element() {
+            if let crate::tui::interactive::ElementType::Table { rows, cols, .. } =
+                &element.element_type
+            {
+                return (*rows, *cols);
+            }
+        }
+        (0, 0)
+    }
+
+    /// Scroll content down by one line
+    fn scroll_content_down(&mut self) {
+        let new_scroll = self.content_scroll.saturating_add(1);
+        if new_scroll < self.content_height {
+            self.content_scroll = new_scroll;
+            self.content_scroll_state = self.content_scroll_state.position(new_scroll as usize);
+        }
+    }
+
+    /// Scroll content up by one line
+    fn scroll_content_up(&mut self) {
+        let new_scroll = self.content_scroll.saturating_sub(1);
+        self.content_scroll = new_scroll;
+        self.content_scroll_state = self.content_scroll_state.position(new_scroll as usize);
+    }
+
+    /// Jump to link by index in filtered list
+    fn jump_to_link(&mut self, idx: usize) {
+        if let Some(display_idx) = self.filtered_link_indices.iter().position(|&i| i == idx) {
+            self.selected_link_idx = Some(display_idx);
         }
     }
 
@@ -641,22 +1104,21 @@ impl App {
     }
 
     pub fn jump_to_parent(&mut self) {
-        if self.focus == Focus::Outline {
-            if let Some(current_idx) = self.outline_state.selected() {
-                if current_idx < self.outline_items.len() {
-                    let current_level = self.outline_items[current_idx].level;
+        // Works in both Outline and Content focus
+        if let Some(current_idx) = self.outline_state.selected() {
+            if current_idx < self.outline_items.len() {
+                let current_level = self.outline_items[current_idx].level;
 
-                    // Search backwards for a heading with lower level (parent)
-                    for i in (0..current_idx).rev() {
-                        if self.outline_items[i].level < current_level {
-                            self.select_outline_index(i);
-                            return;
-                        }
+                // Search backwards for a heading with lower level (parent)
+                for i in (0..current_idx).rev() {
+                    if self.outline_items[i].level < current_level {
+                        self.select_outline_index(i);
+                        return;
                     }
-
-                    // If no parent found, stay at current position
-                    // (we're already at a top-level heading or first item)
                 }
+
+                // If no parent found, stay at current position
+                // (we're already at a top-level heading or first item)
             }
         }
     }
@@ -680,10 +1142,75 @@ impl App {
         self.help_scroll = self.help_scroll.saturating_sub(1);
     }
 
+    /// Scroll help popup down by half a page
+    pub fn scroll_help_page_down(&mut self) {
+        let page_size = 10u16;
+        let new_scroll = self.help_scroll.saturating_add(page_size);
+        let max_scroll = help_text::HELP_LINES.len() as u16;
+        if new_scroll < max_scroll {
+            self.help_scroll = new_scroll;
+        }
+    }
+
+    /// Scroll help popup up by half a page
+    pub fn scroll_help_page_up(&mut self) {
+        let page_size = 10u16;
+        self.help_scroll = self.help_scroll.saturating_sub(page_size);
+    }
+
     pub fn toggle_search(&mut self) {
-        self.show_search = !self.show_search;
-        if !self.show_search {
+        if self.show_search && self.outline_search_active {
+            // If actively typing in search, toggle it off (clear and hide)
+            self.show_search = false;
+            self.outline_search_active = false;
             self.search_query.clear();
+            self.filter_outline();
+        } else if self.show_search {
+            // In accepted search state (showing filtered results) - start fresh search
+            self.search_query.clear();
+            self.filter_outline(); // Restore full outline for new search
+            self.outline_search_active = true; // Re-enter input mode
+        } else {
+            // Enter search mode from normal state
+            self.show_search = true;
+            self.outline_search_active = true;
+            self.search_query.clear();
+        }
+    }
+
+    /// Toggle between outline search and document search, preserving the query
+    pub fn toggle_search_mode(&mut self) {
+        if self.show_search {
+            // Currently in outline search -> switch to doc search
+            let query = self.search_query.clone();
+            let was_active = self.outline_search_active;
+            self.show_search = false;
+            self.outline_search_active = false;
+            self.search_query.clear();
+            self.filter_outline(); // Reset outline filter
+
+            // Enter doc search with the same query
+            self.mode = AppMode::DocSearch;
+            self.doc_search_active = was_active; // Preserve active state
+            self.doc_search_query = query;
+            self.doc_search_matches.clear();
+            self.doc_search_current_idx = None;
+            self.update_doc_search_matches();
+        } else if self.mode == AppMode::DocSearch {
+            // Currently in doc search -> switch to outline search
+            let query = self.doc_search_query.clone();
+            let was_active = self.doc_search_active;
+            self.mode = AppMode::Normal;
+            self.doc_search_active = false;
+            self.doc_search_query.clear();
+            self.doc_search_matches.clear();
+            self.doc_search_current_idx = None;
+
+            // Enter outline search with the same query
+            self.show_search = true;
+            self.outline_search_active = was_active; // Preserve active state
+            self.search_query = query;
+            self.filter_outline();
         }
     }
 
@@ -762,7 +1289,22 @@ impl App {
     // ========== Document Search Methods ==========
 
     /// Enter document search mode (activated by / when content is focused or in interactive mode)
+    /// If in accepted outline search state, re-enter outline search input instead
+    /// If already in accepted doc search state, re-enter doc search input
     pub fn enter_doc_search(&mut self) {
+        // If in accepted outline search state (locked-in filter), re-enter outline search input
+        if self.show_search && !self.outline_search_active {
+            // Re-activate outline search input (keep existing query for editing)
+            self.outline_search_active = true;
+            return;
+        }
+
+        // If already in accepted doc search state, re-enter input mode (keep existing query)
+        if self.mode == AppMode::DocSearch && !self.doc_search_active {
+            self.doc_search_active = true;
+            return;
+        }
+
         // Remember if we came from interactive mode to restore it later
         self.doc_search_from_interactive = self.mode == AppMode::Interactive;
         self.mode = AppMode::DocSearch;
@@ -851,7 +1393,9 @@ impl App {
                 // Scroll to bring match line into view (center it if possible)
                 let half_viewport = 10u16; // Approximate half viewport
                 self.content_scroll = match_line.saturating_sub(half_viewport);
-                self.content_scroll = self.content_scroll.min(self.content_height.saturating_sub(1));
+                self.content_scroll = self
+                    .content_scroll
+                    .min(self.content_height.saturating_sub(1));
                 self.content_scroll_state = self
                     .content_scroll_state
                     .position(self.content_scroll as usize);
@@ -863,7 +1407,12 @@ impl App {
     }
 
     /// Detect if a search match position overlaps with a link and select it
-    fn detect_link_at_search_match(&mut self, match_line: usize, match_col: usize, match_len: usize) {
+    fn detect_link_at_search_match(
+        &mut self,
+        match_line: usize,
+        match_col: usize,
+        match_len: usize,
+    ) {
         use crate::parser::links::extract_links;
 
         // Get current section content
@@ -954,7 +1503,17 @@ impl App {
     }
 
     /// Navigate to next search match
+    /// Handles both doc search matches and accepted outline search navigation
     pub fn next_doc_match(&mut self) {
+        // Check if in accepted outline search state (filtered outline visible)
+        if self.show_search && !self.outline_search_active && !self.outline_items.is_empty() {
+            // Cycle through filtered outline items
+            let current = self.outline_state.selected().unwrap_or(0);
+            let next = (current + 1) % self.outline_items.len();
+            self.select_outline_index(next);
+            return;
+        }
+
         if self.doc_search_matches.is_empty() {
             return;
         }
@@ -968,7 +1527,18 @@ impl App {
     }
 
     /// Navigate to previous search match
+    /// Handles both doc search matches and accepted outline search navigation
     pub fn prev_doc_match(&mut self) {
+        // Check if in accepted outline search state (filtered outline visible)
+        if self.show_search && !self.outline_search_active && !self.outline_items.is_empty() {
+            // Cycle through filtered outline items
+            let current = self.outline_state.selected().unwrap_or(0);
+            let len = self.outline_items.len();
+            let prev = (current + len - 1) % len;
+            self.select_outline_index(prev);
+            return;
+        }
+
         if self.doc_search_matches.is_empty() {
             return;
         }
@@ -1187,6 +1757,34 @@ impl App {
     }
 
     pub fn toggle_focus(&mut self) {
+        // If in locked-in outline search state, Tab cycles to next filtered item
+        if self.show_search && !self.outline_search_active && !self.outline_items.is_empty() {
+            let current = self.outline_state.selected().unwrap_or(0);
+            let next = (current + 1) % self.outline_items.len();
+            self.select_outline_index(next);
+            return;
+        }
+
+        if self.show_outline {
+            self.focus = match self.focus {
+                Focus::Outline => Focus::Content,
+                Focus::Content => Focus::Outline,
+            };
+        }
+    }
+
+    /// Toggle focus backwards (Shift+Tab) - cycles to previous item when search is locked in
+    pub fn toggle_focus_back(&mut self) {
+        // If in locked-in outline search state, Shift+Tab cycles to previous filtered item
+        if self.show_search && !self.outline_search_active && !self.outline_items.is_empty() {
+            let current = self.outline_state.selected().unwrap_or(0);
+            let len = self.outline_items.len();
+            let prev = (current + len - 1) % len;
+            self.select_outline_index(prev);
+            return;
+        }
+
+        // Same as toggle_focus when not in locked search state
         if self.show_outline {
             self.focus = match self.focus {
                 Focus::Outline => Focus::Content,
@@ -1242,10 +1840,7 @@ impl App {
         // Decide whether to persist based on user's config type
         if self.config_has_custom_outline_width {
             // Power user: protect their custom config value, offer explicit save
-            self.set_status_message(&format!(
-                "Width: {}% | S or :w to save",
-                self.outline_width
-            ));
+            self.set_status_message(&format!("Width: {}% | S or :w to save", self.outline_width));
         } else {
             // New user or standard config: safe to persist for better UX
             let _ = self.config.set_outline_width(self.outline_width);
@@ -1264,8 +1859,9 @@ impl App {
         match self.config.set_outline_width(self.outline_width) {
             Ok(_) => {
                 // Update the flag since user explicitly chose to save
-                self.config_has_custom_outline_width =
-                    self.outline_width != 20 && self.outline_width != 30 && self.outline_width != 40;
+                self.config_has_custom_outline_width = self.outline_width != 20
+                    && self.outline_width != 30
+                    && self.outline_width != 40;
                 self.set_status_message(&format!(
                     "✓ Width {}% saved to config",
                     self.outline_width
@@ -1455,7 +2051,11 @@ impl App {
         }
 
         // Find the heading in the document by text
-        let heading = self.document.headings.iter().find(|h| h.text == selected_text)?;
+        let heading = self
+            .document
+            .headings
+            .iter()
+            .find(|h| h.text == selected_text)?;
 
         // Convert byte offset to line number (1-indexed)
         let offset = heading.offset.min(self.document.content.len());
@@ -1470,9 +2070,15 @@ impl App {
     }
 
     pub fn toggle_theme_picker(&mut self) {
-        self.show_theme_picker = !self.show_theme_picker;
         if self.show_theme_picker {
-            // Set selected to current theme when opening
+            // Closing picker - restore original theme if set (user pressed Esc)
+            if let Some(original) = self.theme_picker_original.take() {
+                self.apply_theme_preview(original);
+            }
+            self.show_theme_picker = false;
+        } else {
+            // Opening picker - store current theme and set selection
+            self.theme_picker_original = Some(self.current_theme);
             self.theme_picker_selected = match self.current_theme {
                 ThemeName::OceanDark => 0,
                 ThemeName::Nord => 1,
@@ -1483,23 +2089,13 @@ impl App {
                 ThemeName::TokyoNight => 6,
                 ThemeName::CatppuccinMocha => 7,
             };
+            self.show_theme_picker = true;
         }
     }
 
-    pub fn theme_picker_next(&mut self) {
-        if self.theme_picker_selected < 7 {
-            self.theme_picker_selected += 1;
-        }
-    }
-
-    pub fn theme_picker_previous(&mut self) {
-        if self.theme_picker_selected > 0 {
-            self.theme_picker_selected -= 1;
-        }
-    }
-
-    pub fn apply_selected_theme(&mut self) {
-        let new_theme = match self.theme_picker_selected {
+    /// Convert theme picker selection index to ThemeName
+    fn theme_name_from_index(idx: usize) -> ThemeName {
+        match idx {
             0 => ThemeName::OceanDark,
             1 => ThemeName::Nord,
             2 => ThemeName::Dracula,
@@ -1509,17 +2105,42 @@ impl App {
             6 => ThemeName::TokyoNight,
             7 => ThemeName::CatppuccinMocha,
             _ => ThemeName::OceanDark,
-        };
+        }
+    }
 
-        self.current_theme = new_theme;
-        // Apply color mode when setting theme (also apply custom colors from config)
-        self.theme = Theme::from_name(new_theme)
-            .with_color_mode(self.color_mode, new_theme)
+    /// Apply a theme preview (doesn't save to config)
+    fn apply_theme_preview(&mut self, theme_name: ThemeName) {
+        self.current_theme = theme_name;
+        self.theme = Theme::from_name(theme_name)
+            .with_color_mode(self.color_mode, theme_name)
             .with_custom_colors(&self.config.theme, self.color_mode);
+    }
+
+    pub fn theme_picker_next(&mut self) {
+        if self.theme_picker_selected < 7 {
+            self.theme_picker_selected += 1;
+            // Apply theme preview immediately
+            let theme_name = Self::theme_name_from_index(self.theme_picker_selected);
+            self.apply_theme_preview(theme_name);
+        }
+    }
+
+    pub fn theme_picker_previous(&mut self) {
+        if self.theme_picker_selected > 0 {
+            self.theme_picker_selected -= 1;
+            // Apply theme preview immediately
+            let theme_name = Self::theme_name_from_index(self.theme_picker_selected);
+            self.apply_theme_preview(theme_name);
+        }
+    }
+
+    pub fn apply_selected_theme(&mut self) {
+        // Theme is already applied via preview, just save to config and close
+        self.theme_picker_original = None; // Clear so toggle doesn't restore
         self.show_theme_picker = false;
 
         // Save to config (silently ignore errors)
-        let _ = self.config.set_theme(new_theme);
+        let _ = self.config.set_theme(self.current_theme);
     }
 
     pub fn copy_content(&mut self) {
@@ -2549,7 +3170,8 @@ impl App {
                     .trim();
 
                 // Check if this matches our target checkbox
-                if line_text == clean_text {
+                let stripped_line_text = crate::parser::utils::strip_markdown_inline(line_text);
+                if stripped_line_text == clean_text {
                     // Toggle the checkbox
                     let new_line = if current_checked {
                         // Change [x] or [X] to [ ]

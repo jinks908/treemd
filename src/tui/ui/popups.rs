@@ -335,7 +335,7 @@ pub fn render_theme_picker(frame: &mut Frame, app: &App, area: Rect) {
     // Create lines for each theme
     let mut lines = vec![
         Line::from(vec![Span::styled(
-            "Select Theme (j/k to navigate, Enter to apply, Esc to cancel)",
+            "Select Theme (j/k: preview, Enter: save, Esc: cancel)",
             Style::default()
                 .fg(theme.modal_description())
                 .add_modifier(Modifier::ITALIC),
@@ -345,7 +345,9 @@ pub fn render_theme_picker(frame: &mut Frame, app: &App, area: Rect) {
 
     for (idx, (theme_name, name, description)) in themes.iter().enumerate() {
         let is_selected = idx == app.theme_picker_selected;
-        let is_current = *theme_name == app.current_theme;
+        // Show ✓ next to the saved theme (original), not the preview
+        let saved_theme = app.theme_picker_original.unwrap_or(app.current_theme);
+        let is_saved = *theme_name == saved_theme;
 
         let (prefix, style) = if is_selected {
             (
@@ -358,7 +360,7 @@ pub fn render_theme_picker(frame: &mut Frame, app: &App, area: Rect) {
             ("  ", Style::default().fg(theme.modal_text()))
         };
 
-        let current_marker = if is_current { " ✓" } else { "" };
+        let current_marker = if is_saved { " ✓" } else { "" };
         let line_text = format!("{}{}{}", prefix, name, current_marker);
 
         lines.push(Line::from(vec![Span::styled(line_text, style)]));
@@ -588,10 +590,7 @@ pub fn render_command_palette(frame: &mut Frame, app: &App, theme: &Theme) {
             };
 
             // Command name
-            let mut spans = vec![
-                Span::styled(prefix, style),
-                Span::styled(cmd.name, style),
-            ];
+            let mut spans = vec![Span::styled(prefix, style), Span::styled(cmd.name, style)];
 
             // Show aliases in dimmer text
             if !cmd.aliases.is_empty() {
@@ -620,7 +619,10 @@ pub fn render_command_palette(frame: &mut Frame, app: &App, theme: &Theme) {
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
         Span::styled("↑↓/Tab", Style::default().fg(theme.modal_key_fg())),
-        Span::styled(" navigate  ", Style::default().fg(theme.modal_description())),
+        Span::styled(
+            " navigate  ",
+            Style::default().fg(theme.modal_description()),
+        ),
         Span::styled("Enter", Style::default().fg(theme.modal_key_fg())),
         Span::styled(" execute  ", Style::default().fg(theme.modal_description())),
         Span::styled("Esc", Style::default().fg(theme.modal_key_fg())),

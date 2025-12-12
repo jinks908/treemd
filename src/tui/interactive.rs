@@ -12,6 +12,23 @@ use crate::parser::output::{Block, InlineElement};
 use crate::parser::{Link, LinkTarget};
 use std::collections::HashMap;
 
+// Sub-index encoding constants for nested elements within list items
+// Format: item_idx * ITEM_MULTIPLIER + nested_idx * NESTED_MULTIPLIER + TYPE_OFFSET
+/// Multiplier for list item index in sub_idx encoding
+pub const ITEM_MULTIPLIER: usize = 10000;
+/// Multiplier for nested block index within a list item
+pub const NESTED_MULTIPLIER: usize = 10;
+/// Offset for inline links within list items (item_idx * 1000 + inline_idx + LINK_OFFSET)
+pub const LINK_OFFSET: usize = 100;
+/// Multiplier for link encoding (different from nested blocks)
+pub const LINK_ITEM_MULTIPLIER: usize = 1000;
+/// Offset for code blocks nested in list items
+pub const CODE_BLOCK_OFFSET: usize = 5000;
+/// Offset for tables nested in list items
+pub const TABLE_OFFSET: usize = 6000;
+/// Offset for images nested in list items
+pub const IMAGE_OFFSET: usize = 7000;
+
 /// Interactive navigation state
 #[derive(Debug, Clone)]
 pub struct InteractiveState {
@@ -240,10 +257,11 @@ impl InteractiveState {
                         for (inline_idx, inline_elem) in item.inline.iter().enumerate() {
                             if let InlineElement::Link { text, url, .. } = inline_elem {
                                 // Use a composite sub_idx to differentiate from checkboxes
-                                // Format: item_idx * 1000 + inline_idx + 100 (to avoid collision with checkbox indices)
                                 let id = ElementId {
                                     block_idx,
-                                    sub_idx: Some(item_idx * 1000 + inline_idx + 100),
+                                    sub_idx: Some(
+                                        item_idx * LINK_ITEM_MULTIPLIER + inline_idx + LINK_OFFSET,
+                                    ),
                                 };
 
                                 // Parse link target
@@ -287,7 +305,88 @@ impl InteractiveState {
                             }
                         }
 
+                        // Account for main item line
                         current_line += 1;
+
+                        // Process nested blocks within list items (code blocks, tables, etc.)
+                        for (nested_idx, nested_block) in item.blocks.iter().enumerate() {
+                            let nested_start_line = current_line;
+                            let nested_base =
+                                item_idx * ITEM_MULTIPLIER + nested_idx * NESTED_MULTIPLIER;
+                            match nested_block {
+                                Block::Code {
+                                    language, content, ..
+                                } => {
+                                    let id = ElementId {
+                                        block_idx,
+                                        sub_idx: Some(nested_base + CODE_BLOCK_OFFSET),
+                                    };
+
+                                    let lines = 2 + content.lines().count();
+
+                                    self.elements.push(InteractiveElement {
+                                        id,
+                                        element_type: ElementType::CodeBlock {
+                                            language: language.clone(),
+                                            content: content.clone(),
+                                            block_idx,
+                                        },
+                                        line_range: (nested_start_line, nested_start_line + lines),
+                                    });
+
+                                    current_line += lines;
+                                }
+                                Block::Table { headers, rows, .. } => {
+                                    let id = ElementId {
+                                        block_idx,
+                                        sub_idx: Some(nested_base + TABLE_OFFSET),
+                                    };
+
+                                    let lines = 3 + rows.len();
+
+                                    self.elements.push(InteractiveElement {
+                                        id,
+                                        element_type: ElementType::Table {
+                                            rows: rows.len(),
+                                            cols: headers.len(),
+                                            block_idx,
+                                        },
+                                        line_range: (nested_start_line, nested_start_line + lines),
+                                    });
+
+                                    self.element_states
+                                        .entry(id)
+                                        .or_insert(ElementState::Table {
+                                            selected_row: 0,
+                                            selected_col: 0,
+                                        });
+
+                                    current_line += lines;
+                                }
+                                Block::Image { alt, src, .. } => {
+                                    let id = ElementId {
+                                        block_idx,
+                                        sub_idx: Some(nested_base + IMAGE_OFFSET),
+                                    };
+
+                                    self.elements.push(InteractiveElement {
+                                        id,
+                                        element_type: ElementType::Image {
+                                            alt: alt.clone(),
+                                            src: src.clone(),
+                                            block_idx,
+                                        },
+                                        line_range: (nested_start_line, nested_start_line + 1),
+                                    });
+
+                                    current_line += 1;
+                                }
+                                _ => {
+                                    // Non-interactive nested blocks
+                                    current_line += count_single_block_lines(nested_block);
+                                }
+                            }
+                        }
                     }
                 }
                 Block::Code {
@@ -740,5 +839,88 @@ fn count_single_block_lines(block: &Block) -> usize {
         Block::Image { .. } => 1,
         Block::HorizontalRule => 1,
         Block::Details { blocks, .. } => 1 + count_block_lines(blocks),
+    }
+}
+
+#[cfg(test)]
+mod interactive_tests {
+    use super::*;
+    use crate::parser::content::parse_content;
+
+    #[test]
+    fn test_nested_code_blocks_in_list_items() {
+        // Regression test: code blocks nested inside list items should be detected
+        let markdown = r#"# Test Document
+
+1. **First step**
+   ```bash
+   echo "hello"
+   ```
+
+2. **Second step**
+   ```python
+   print("world")
+   ```
+
+| Header | Value |
+|--------|-------|
+| A      | 1     |
+"#;
+
+        let blocks = parse_content(markdown, 0);
+        let mut state = InteractiveState::new();
+        state.index_elements(&blocks);
+
+        // Should find: 2 nested code blocks + 1 table = 3 interactive elements
+        assert_eq!(
+            state.elements.len(),
+            3,
+            "Should find 2 code blocks and 1 table"
+        );
+
+        // Verify we have the right types
+        let code_count = state
+            .elements
+            .iter()
+            .filter(|e| matches!(e.element_type, ElementType::CodeBlock { .. }))
+            .count();
+        let table_count = state
+            .elements
+            .iter()
+            .filter(|e| matches!(e.element_type, ElementType::Table { .. }))
+            .count();
+
+        assert_eq!(code_count, 2, "Should find 2 code blocks");
+        assert_eq!(table_count, 1, "Should find 1 table");
+    }
+
+    #[test]
+    fn test_mixed_interactive_elements() {
+        let markdown = r#"# Document
+
+A paragraph with a [link](https://example.com).
+
+- [ ] Unchecked task
+- [x] Checked task
+
+```rust
+fn main() {}
+```
+
+| Col1 | Col2 |
+|------|------|
+| a    | b    |
+"#;
+
+        let blocks = parse_content(markdown, 0);
+        let mut state = InteractiveState::new();
+        state.index_elements(&blocks);
+
+        // Should find: 1 link + 2 checkboxes + 1 code block + 1 table = 5 elements
+        assert!(
+            state.elements.len() >= 5,
+            "Should find at least 5 interactive elements, found {}",
+            state.elements.len()
+        );
     }
 }
