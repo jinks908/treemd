@@ -199,7 +199,7 @@ pub const PALETTE_COMMANDS: &[PaletteCommand] = &[
     ),
 ];
 
-/// A match found during document search
+/// A match found during search
 #[derive(Debug, Clone)]
 pub struct SearchMatch {
     /// Line number (0-indexed)
@@ -224,6 +224,7 @@ pub struct App {
     pub show_help: bool,
     pub help_scroll: u16,
     pub show_search: bool,
+    pub outline_search_active: bool, // Whether search input is active (cursor visible)
     pub search_query: String,
     pub highlighter: SyntaxHighlighter,
     pub show_outline: bool,
@@ -381,6 +382,7 @@ impl App {
             show_help: false,
             help_scroll: 0,
             show_search: false,
+            outline_search_active: false,
             search_query: String::new(),
             highlighter: SyntaxHighlighter::new(),
             show_outline: true,
@@ -466,8 +468,12 @@ impl App {
         // Then check app mode
         match self.mode {
             AppMode::Normal => {
-                if self.show_search {
+                if self.show_search && self.outline_search_active {
+                    // Active input mode
                     KeybindingMode::Search
+                } else if self.show_search {
+                    // Accepted search - show highlights but use DocSearch bindings for n/N/Tab
+                    KeybindingMode::DocSearch
                 } else {
                     KeybindingMode::Normal
                 }
@@ -564,6 +570,7 @@ impl App {
             EnterLinkFollowMode => self.enter_link_follow_mode(),
             EnterSearchMode => self.toggle_search(),
             EnterDocSearch => self.enter_doc_search(),
+            ToggleSearchMode => self.toggle_search_mode(),
             ExitMode => self.exit_current_mode(),
             OpenCommandPalette => self.open_command_palette(),
 
@@ -689,6 +696,15 @@ impl App {
 
     /// Exit the current mode based on app state
     fn exit_current_mode(&mut self) {
+        // Handle outline search - clear everything
+        if self.show_search {
+            self.search_query.clear();
+            self.filter_outline();
+            self.show_search = false;
+            self.outline_search_active = false;
+            return;
+        }
+
         match self.mode {
             AppMode::Interactive => self.exit_interactive_mode(),
             AppMode::LinkFollow => {
@@ -723,6 +739,13 @@ impl App {
 
     /// Handle confirm action based on current mode
     fn handle_confirm_action(&mut self) {
+        // Handle outline search - accept but keep highlights visible
+        if self.show_search && self.outline_search_active {
+            self.outline_search_active = false;
+            // Keep show_search = true so highlights remain visible
+            return;
+        }
+
         match self.mode {
             AppMode::ConfirmFileCreate => {
                 if let Err(e) = self.confirm_file_create() {
@@ -758,6 +781,12 @@ impl App {
 
     /// Handle backspace in search contexts
     fn handle_search_backspace(&mut self) {
+        // Handle outline search - only if active
+        if self.show_search && self.outline_search_active {
+            self.search_backspace();
+            return;
+        }
+
         match self.mode {
             AppMode::Search => self.search_backspace(),
             AppMode::DocSearch => self.doc_search_backspace(),
@@ -1097,9 +1126,53 @@ impl App {
     }
 
     pub fn toggle_search(&mut self) {
-        self.show_search = !self.show_search;
-        if !self.show_search {
+        if self.show_search {
+            // If already showing, clear and hide
+            self.show_search = false;
+            self.outline_search_active = false;
             self.search_query.clear();
+            self.filter_outline();
+        } else {
+            // Enter search mode
+            self.show_search = true;
+            self.outline_search_active = true;
+            self.search_query.clear();
+        }
+    }
+
+    /// Toggle between outline search and document search, preserving the query
+    pub fn toggle_search_mode(&mut self) {
+        if self.show_search {
+            // Currently in outline search -> switch to doc search
+            let query = self.search_query.clone();
+            let was_active = self.outline_search_active;
+            self.show_search = false;
+            self.outline_search_active = false;
+            self.search_query.clear();
+            self.filter_outline(); // Reset outline filter
+
+            // Enter doc search with the same query
+            self.mode = AppMode::DocSearch;
+            self.doc_search_active = was_active; // Preserve active state
+            self.doc_search_query = query;
+            self.doc_search_matches.clear();
+            self.doc_search_current_idx = None;
+            self.update_doc_search_matches();
+        } else if self.mode == AppMode::DocSearch {
+            // Currently in doc search -> switch to outline search
+            let query = self.doc_search_query.clone();
+            let was_active = self.doc_search_active;
+            self.mode = AppMode::Normal;
+            self.doc_search_active = false;
+            self.doc_search_query.clear();
+            self.doc_search_matches.clear();
+            self.doc_search_current_idx = None;
+
+            // Enter outline search with the same query
+            self.show_search = true;
+            self.outline_search_active = was_active; // Preserve active state
+            self.search_query = query;
+            self.filter_outline();
         }
     }
 

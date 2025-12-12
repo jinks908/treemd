@@ -192,8 +192,8 @@ pub fn run(terminal: &mut DefaultTerminal, app: App) -> Result<()> {
 fn handle_text_input(app: &mut App, code: KeyCode, modifiers: crossterm::event::KeyModifiers) -> bool {
     // Text input modes: outline search, doc search, link search, command palette, cell edit
 
-    // Outline search mode
-    if app.show_search {
+    // Outline search mode - only handle input when active
+    if app.show_search && app.outline_search_active {
         match code {
             KeyCode::Char('u') if modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
                 app.search_query.clear();

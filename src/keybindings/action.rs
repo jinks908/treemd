@@ -61,6 +61,8 @@ pub enum Action {
     EnterSearchMode,
     /// Enter document search mode
     EnterDocSearch,
+    /// Toggle between outline and document search modes
+    ToggleSearchMode,
     /// Exit current mode (generic escape)
     ExitMode,
 
@@ -215,6 +217,7 @@ impl Action {
             Action::EnterLinkFollowMode => "Enter link follow mode",
             Action::EnterSearchMode => "Search/filter headings",
             Action::EnterDocSearch => "Search document content",
+            Action::ToggleSearchMode => "Toggle outline/content search",
             Action::ExitMode => "Exit current mode",
 
             // Link navigation
@@ -328,6 +331,7 @@ impl Action {
             | Action::EnterLinkFollowMode
             | Action::EnterSearchMode
             | Action::EnterDocSearch
+            | Action::ToggleSearchMode
             | Action::ExitMode => "Modes",
 
             Action::NextLink

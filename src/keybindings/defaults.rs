@@ -317,6 +317,9 @@ fn add_search_mode(kb: &mut Keybindings) {
 
     // Delete character
     bind(kb, Search, "Backspace", SearchBackspace);
+
+    // Toggle to doc search
+    bind(kb, Search, "Tab", ToggleSearchMode);
 }
 
 fn add_doc_search_mode(kb: &mut Keybindings) {
@@ -335,6 +338,9 @@ fn add_doc_search_mode(kb: &mut Keybindings) {
     // Navigate matches while typing
     bind(kb, DocSearch, "Down", NextMatch);
     bind(kb, DocSearch, "Up", PrevMatch);
+
+    // Toggle to outline search
+    bind(kb, DocSearch, "Tab", ToggleSearchMode);
 }
 
 fn add_command_palette_mode(kb: &mut Keybindings) {
